@@ -129,19 +129,15 @@
     };
     try {
       const initialContext = pageContext();
-      const initialAccount = SITE.accountName(document);
       const initialToken = globalThis.localStorage?.getItem("userPortalVerifyToken");
-      if (task.accountId && await SITE.account(document) !== task.accountId) {
-        const error = new Error("来源账号与原任务不同，请登录原账号。"); error.auth = true; throw error;
-      }
       let listSize = checkpoint ? checkpoint.size || initialContext.size : initialContext.listSize || initialContext.size;
       const readAll = Boolean(initialContext.listSize) && listSize >= initialContext.listSize;
       let context = { ...initialContext, size: listSize };
       const initialQuery = JSON.stringify(initialContext.filters);
       const initialVisiblePage = JSON.stringify(initialContext.visiblePage);
       const ensureContextUnchanged = () => {
-        if (SITE.accountName(document) !== initialAccount || globalThis.localStorage?.getItem("userPortalVerifyToken") !== initialToken) {
-          const error = new Error("来源账号或登录状态已变化，请恢复原账号后继续。"); error.auth = true; throw error;
+        if (globalThis.localStorage?.getItem("userPortalVerifyToken") !== initialToken) {
+          const error = new Error("登录状态已变化，请重新查询后继续。"); error.auth = true; throw error;
         }
         const current = pageContext();
         if (JSON.stringify(current.filters) !== initialQuery || current.url !== initialContext.url ||
@@ -265,7 +261,7 @@
       }
       if (pauseRequested && !failure && !stopped) {
         await log("暂停任务", error.message);
-        await chrome.runtime.sendMessage({ type: "PIC_EXPERT_TASK_PAUSED", taskId, error: stopped ? error.message : "" }).catch(() => {});
+        await chrome.runtime.sendMessage({ type: "PIC_EXPERT_TASK_PAUSED", taskId, error: "" }).catch(() => {});
         return;
       }
       await log("任务中断", error.message, "error");
@@ -282,10 +278,8 @@
           tradeDateRange = [filters.beginTransDate, filters.endTransDate];
         } catch {}
       }
-      if (!ready) { sendResponse({ ok: true, ready, running, tradeDateRange }); return false; }
-      SITE.account(document).then(accountId => sendResponse({ ok: true, ready, running, tradeDateRange, accountId }))
-        .catch(error => sendResponse({ ok: false, error: error.message }));
-      return true;
+      sendResponse({ ok: true, ready, running, tradeDateRange });
+      return false;
     }
     if (message?.type === "PIC_EXPERT_STOP") {
       if (message.taskId && message.taskId !== activeTaskId) { sendResponse({ ok: true, running: false }); return false; }

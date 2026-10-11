@@ -1,27 +1,65 @@
 <!doctype html>
 <html lang="zh-CN">
-<head>
-  <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width,initial-scale=1">
-  <title>Pic Expert</title>
-  <link rel="stylesheet" href="styles.css">
-</head>
-<body class="popup-page">
-  <header class="topbar">
-    <img class="site-logo" src="logo.png" alt="银联商务">
-    <div class="topbar-divider"></div>
-    <div><h1>订单资料助手</h1><p class="subtitle">商户统一服务平台</p></div>
-  </header>
-  <main class="popup-main">
-    <section class="status-card" aria-live="polite">
-      <div class="status-line"><span>家电电脑任务状态</span><strong id="entry-status">读取中…</strong></div>
-      <p id="entry-progress" class="hint"></p>
-    </section>
-    <button id="open-task" class="primary-button" type="button">家电电脑资料导出</button>
-    <button id="open-digital" class="primary-button" type="button">数码资料导出</button>
-    <p class="hint entry-hint">先在网站登录并查询订单，再从任务页面开始下载。</p>
-    <div id="entry-error" role="alert"></div>
-  </main>
-  <script src="entry.js"></script>
-</body>
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Pic Expert</title>
+    <link rel="icon" href="favicon.ico">
+    <link rel="stylesheet" href="styles.css">
+  </head>
+  <body class="popup-page">
+    <header class="topbar">
+      <img class="site-logo" src="logo.png" alt="银联商务">
+      <div class="topbar-divider"></div>
+      <div class="topbar-content">
+        <h1>订单资料助手</h1>
+        <p class="subtitle">商户统一服务平台</p>
+      </div>
+    </header>
+
+    <main class="popup-main">
+      <section class="status-card" aria-live="polite">
+        <div class="status-line">
+          <span>当前商户</span>
+          <strong id="merchant-name">检测中…</strong>
+        </div>
+        <div class="status-line">
+          <span>商户号</span>
+          <strong id="merchant-number"></strong>
+        </div>
+      </section>
+
+      <p id="entry-title" class="section-label" hidden>可用导出功能</p>
+
+      <section class="actions-group">
+        <div id="entry-card" class="action-card-wrap" hidden>
+          <button id="open-task" class="primary-button merchant-action" type="button">
+            <div class="btn-top-row">
+              <span class="btn-main-title">家电电脑资料导出</span>
+              <strong id="entry-status" class="status-badge">读取中…</strong>
+            </div>
+            <span id="entry-progress" class="btn-badge">SN码、发票及证明材料</span>
+          </button>
+        </div>
+
+        <div id="digital-card" class="action-card-wrap" hidden>
+          <button id="open-digital" class="primary-button merchant-action secondary-action" type="button">
+            <div class="btn-top-row">
+              <span class="btn-main-title">数码资料导出</span>
+              <strong id="digital-status" class="status-badge">读取中…</strong>
+            </div>
+            <span id="digital-progress" class="btn-badge">按订单类型下载数码图片资料</span>
+          </button>
+        </div>
+      </section>
+
+      <div class="privacy-note entry-hint-note">
+        <p class="hint entry-hint">先在网站查询订单，再打开对应控制台下载。</p>
+      </div>
+
+      <p id="entry-error" class="error-message" role="alert"></p>
+    </main>
+
+    <script src="entry.js"></script>
+  </body>
 </html>

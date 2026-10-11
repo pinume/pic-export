@@ -16,10 +16,6 @@ const assertIdle = async () => {
     if (["running", "pausing", "stopping", "finalizing"].includes(task?.status)) throw new Error("已有任务运行；请先暂停或停止。");
   }
 };
-const assertAccount = (task, accountId) => {
-  if (!/^[a-f0-9]{64}$/.test(accountId || "")) throw new Error("无法确认来源账号。");
-  if (task && (!task.accountId || task.accountId !== accountId)) throw new Error(task.accountId ? "来源账号与原任务不同，请登录原账号。" : "旧任务缺少可验证的账号归属，请保留原数据并开始新任务。");
-};
 const isTaskPage = sender => sender.url?.split("?")[0] === chrome.runtime.getURL("popup.html");
 const mutate = operation => {
   const promise = stateQueue.then(operation);
@@ -74,12 +70,11 @@ const orders = globalThis.PIC_EXPERT_ORDER_DOWNLOADS({
 const startTask = message => mutate(async () => {
   const business = businessOf(message);
   await assertIdle();
-  assertAccount(null, message.accountId);
   if (!Number.isInteger(message.tabId) || !Number.isInteger(message.frameId)) throw new Error("目标页面不完整。");
   const range = message.tradeDateRange;
   if (!Array.isArray(range) || range.length !== 2 || range.some(value => typeof value !== "string" || !/^\d{8}$/.test(value))) throw new Error("无法识别本次查询的交易日期区间。");
   const id = makeTaskId();
-  const task = { id, business, accountId: message.accountId, folderName: (business === "digital" ? "数码/" : "家电电脑/") + range[0] + "-" + range[1] + "_" + id, status: "running", tabId: message.tabId, frameId: message.frameId,
+  const task = { id, business, folderName: (business === "digital" ? "数码/" : "家电电脑/") + range[0] + "-" + range[1] + "_" + id, status: "running", tabId: message.tabId, frameId: message.frameId,
     startedAt: new Date().toISOString(), page: 1,
     scanned: 0, completed: 0, skipped: 0, failed: 0, currentRows: [], phase: "listing", listed: 0 };
   const changes = { logs: [] };
@@ -152,7 +147,6 @@ const resumeTask = (message, sender) => mutate(async () => {
   if (!task || !(["paused", "failed"].includes(task.status) || task.status === "completed" && task.failed > 0) || !task.checkpoint) throw new Error("没有可继续的断点，请先完成原查询。");
   if (!Number.isInteger(message.tabId) || !Number.isInteger(message.frameId)) throw new Error("目标页面不完整。");
   await assertIdle();
-  assertAccount(task, message.accountId);
   task.tabId = message.tabId; task.frameId = message.frameId; task.status = "running"; task.error = "";
   task.generation = (task.generation || 0) + 1;
   delete task.forcePause; task.manifestError = "";

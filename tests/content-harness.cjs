@@ -11,8 +11,6 @@ function harness(pages, options = {}) {
     hasOtherFilters: Boolean(options.hasOtherFilters), listSize: options.listSize
   };
   const siteApi = {
-    accountName: () => options.accountName ? options.accountName() : "fixture-account",
-    account: async () => options.accountId || "a".repeat(64),
     context: () => ({ ...context, filters: currentFilters, visiblePage: options.visiblePage || {
       page: 1, total: pages.reduce((count, rows) => count + rows.length, 0), signature: pages[0].map(row => row.merOrderId + "::" + row.transRef).join("\n")
     } }),
@@ -59,8 +57,7 @@ function harness(pages, options = {}) {
   sandbox.globalThis = sandbox;
   if (options.realApi) {
     vm.runInNewContext(fs.readFileSync(require.resolve("../site-api.js"), "utf8"), sandbox);
-    sandbox.PIC_EXPERT_SITE_API = { ...sandbox.PIC_EXPERT_SITE_API, context: siteApi.context, isReady: siteApi.isReady,
-      account: siteApi.account, accountName: siteApi.accountName };
+    sandbox.PIC_EXPERT_SITE_API = { ...sandbox.PIC_EXPERT_SITE_API, context: siteApi.context, isReady: siteApi.isReady };
   }
   vm.runInNewContext(fs.readFileSync(require.resolve("../content.js"), "utf8"), sandbox);
   const exposed = sandbox.module.exports;

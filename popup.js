@@ -40,6 +40,26 @@ const renderTask = task => {
     " · 页 " + task.page + " · 已处理 " + task.scanned + " · 正在处理 " + (task.currentRows?.length || 0) +
     " · 成功 " + task.completed + " · 跳过 " + task.skipped + " · 失败 " + task.failed : "";
   if (task?.phase === "listing") progressElement.textContent += " · 列表已读取 " + (task.listed || 0);
+  const setEl = (sel, txt) => { const el = document.querySelector(sel); if (el) el.textContent = txt; };
+  const badge = document.querySelector("#status-badge");
+  if (badge) { badge.textContent = statusElement.textContent; if (badge.dataset) badge.dataset.status = task?.status || ""; }
+  if (!task) {
+    setEl("#stat-total", "-"); setEl("#stat-completed", "-"); setEl("#stat-skipped", "-"); setEl("#stat-failed", "-");
+    const bar = document.querySelector("#progress-bar-fill");
+    if (bar?.style) { bar.style.width = "0%"; if (bar.dataset) bar.dataset.status = ""; }
+    setEl("#progress-percent", "0%");
+  } else {
+    setEl("#stat-total", String(task.total ?? task.checkpoint?.total ?? (task.status === "running" ? "核对中" : "-")));
+    setEl("#stat-completed", String(task.completed ?? 0));
+    setEl("#stat-skipped", String(task.skipped ?? 0));
+    setEl("#stat-failed", String(task.failed ?? 0));
+    const totalNum = Number(task.total ?? task.checkpoint?.total);
+    const scannedNum = Number(task.scanned || 0);
+    const pct = Number.isFinite(totalNum) && totalNum > 0 ? Math.min(100, Math.max(0, Math.round((scannedNum / totalNum) * 100))) : (task.status === "completed" ? 100 : 0);
+    const bar = document.querySelector("#progress-bar-fill");
+    if (bar?.style) { bar.style.width = pct + "%"; if (bar.dataset) bar.dataset.status = task.status; }
+    setEl("#progress-percent", task.phase === "listing" && task.status === "running" ? "读取列表 " + (task.listed || 0) : pct + "%");
+  }
   const terminal = task && ["completed", "failed"].includes(task.status);
   completionElement.hidden = !terminal;
   completionElement.dataset.status = terminal ? task.status : "";
@@ -69,7 +89,7 @@ const renderTask = task => {
 const refresh = async () => {
   const selected = business;
   try { const response = await request({ type: "PIC_EXPERT_TASK_STATE" }); if (selected === business) renderTask(response.task); }
-  catch (error) { errorElement.textContent = error.message; }
+  catch (error) { if (selected === business) errorElement.textContent = error.message; }
 };
 const launch = async resume => {
   businessSelect.disabled = true;
@@ -89,9 +109,8 @@ const launch = async resume => {
     const probe = probes.find(item => item.frameId === frameId)?.result;
     if (probe?.running) throw new Error("页面上一笔任务仍在退出，请稍候，或手动刷新并恢复原查询后继续。");
     task = (await request({ type: resume ? "PIC_EXPERT_TASK_RESUME" : "PIC_EXPERT_TASK_BEGIN", tabId: tab.id, frameId,
-      accountId: probe.accountId,
       ...(resume ? {} : { tradeDateRange: probe?.tradeDateRange }) })).task;
-    const response = await chrome.tabs.sendMessage(tab.id, { type: "PIC_EXPERT_START", taskId: task.id, task: { business, accountId: task.accountId }, checkpoint: resume ? task.checkpoint : null }, { frameId });
+    const response = await chrome.tabs.sendMessage(tab.id, { type: "PIC_EXPERT_START", taskId: task.id, task: { business }, checkpoint: resume ? task.checkpoint : null }, { frameId });
     if (!response?.ok) throw new Error(response?.error || "页面任务启动失败。");
     renderTask(task);
   } catch (error) {
@@ -107,30 +126,26 @@ resumeButton.addEventListener("click", async () => {
   resumeButton.disabled = true;
   try { await launch(true); } finally { resumeButton.disabled = false; }
 });
-pauseButton.addEventListener("click", async () => {
-  pauseButton.disabled = true;
-  try { renderTask((await request({ type: "PIC_EXPERT_TASK_PAUSE" })).task); }
-  catch (error) { errorElement.textContent = error.message; }
-  finally { pauseButton.disabled = false; }
-});
+for (const [button, type] of [
+  [pauseButton, "PIC_EXPERT_TASK_PAUSE"],
+  [stopButton, "PIC_EXPERT_TASK_STOP"],
+  [retryButton, "PIC_EXPERT_MANIFEST_RETRY"]
+]) {
+  button.addEventListener("click", async () => {
+    const selected = business;
+    button.disabled = true;
+    try { const response = await request({ type }); if (selected === business) renderTask(response.task); }
+    catch (error) { if (selected === business) errorElement.textContent = error.message; }
+    finally { button.disabled = false; }
+  });
+}
 exportLogsButton.addEventListener("click", async () => {
+  const selected = business;
   exportingLogs = true;
   exportLogsButton.disabled = true;
-  try { await request({ type: "PIC_EXPERT_LOG_EXPORT" }); copyStatusElement.textContent = "完整日志已开始下载"; }
-  catch (error) { errorElement.textContent = error.message; }
+  try { await request({ type: "PIC_EXPERT_LOG_EXPORT" }); if (selected === business) copyStatusElement.textContent = "完整日志已开始下载"; }
+  catch (error) { if (selected === business) errorElement.textContent = error.message; }
   finally { exportingLogs = false; exportLogsButton.disabled = false; }
-});
-stopButton.addEventListener("click", async () => {
-  stopButton.disabled = true;
-  try { renderTask((await request({ type: "PIC_EXPERT_TASK_STOP" })).task); }
-  catch (error) { errorElement.textContent = error.message; }
-  finally { stopButton.disabled = false; }
-});
-retryButton.addEventListener("click", async () => {
-  retryButton.disabled = true;
-  try { renderTask((await request({ type: "PIC_EXPERT_MANIFEST_RETRY" })).task); }
-  catch (error) { errorElement.textContent = error.message; }
-  finally { retryButton.disabled = false; }
 });
 copyLogsButton.addEventListener("click", async () => {
   try {
@@ -144,6 +159,7 @@ copyLogsButton.addEventListener("click", async () => {
 });
 businessSelect.addEventListener("change", () => {
   business = businessSelect.value;
+  copyStatusElement.textContent = "";
   const url = new URL(location.href); url.searchParams.set("business", business);
   history.replaceState(null, "", url.href);
   refresh();

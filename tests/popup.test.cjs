@@ -3,16 +3,16 @@ const assert = require("node:assert/strict");
 const vm = require("node:vm");
 const fs = require("node:fs");
 
-const loadPopup = async task => {
+const loadPopup = async (task, sendMessage) => {
   const elements = new Map(["#business", "#start", "#stop", "#retry", "#pause", "#resume", "#export-logs", "#status",
     "#progress", "#completion", "#error", "#interruption", "#logs", "#copy-logs", "#copy-status"].map(selector => [selector, {
     hidden: false, disabled: false, textContent: "", value: "", dataset: {}, scrollHeight: 0,
-    addEventListener() {}, focus() {}, select() {}
+    listeners: {}, addEventListener(event, listener) { this.listeners[event] = listener; }, focus() {}, select() {}
   }]));
   const sandbox = {
     document: { querySelector: selector => elements.get(selector), execCommand: () => true },
-    chrome: { runtime: { sendMessage: async () => ({ ok: true, task }) }, tabs: { query: async () => [] } },
-    location: { search: "" }, URLSearchParams,
+    chrome: { runtime: { sendMessage: sendMessage || (async () => ({ ok: true, task })) }, tabs: { query: async () => [] } },
+    location: { search: "", href: "https://fixture.test/popup.html" }, URLSearchParams, URL, history: { replaceState() {} },
     navigator: { clipboard: { writeText: async () => {} } },
     window: { addEventListener() {} },
     setInterval: () => 1, clearInterval() {}, Date, console
@@ -69,4 +69,49 @@ test("popup displays confirmed totals and all in-flight orders, including a zero
   assert.equal(active.get("#progress").textContent, "订单总数 10 · 页 1 · 已处理 2 · 正在处理 3 · 成功 1 · 跳过 1 · 失败 0");
   const empty = await loadPopup({ status: "running", total: 0, currentRows: [], logs: [] });
   assert.match(empty.get("#progress").textContent, /^订单总数 0 /);
+});
+
+for (const [button, message] of [["#pause", "PIC_EXPERT_TASK_PAUSE"], ["#stop", "PIC_EXPERT_TASK_STOP"], ["#retry", "PIC_EXPERT_MANIFEST_RETRY"]]) {
+  test(button + " response does not overwrite a newly selected business", async () => {
+    let finish;
+    const original = { status: "running", completed: 3, logs: [] };
+    const selected = { status: "paused", completed: 8, checkpoint: {}, logs: [] };
+    const elements = await loadPopup(original, request => request.type === message ? new Promise(resolve => { finish = resolve; }) : Promise.resolve({ ok: true, task: request.business === "digital" ? selected : original }));
+    const pending = elements.get(button).listeners.click();
+    elements.get("#business").value = "digital";
+    elements.get("#business").listeners.change();
+    await new Promise(setImmediate);
+    finish({ ok: true, task: { ...original, status: "pausing" } });
+    await pending;
+    assert.equal(elements.get("#status").textContent, "已暂停");
+    assert.match(elements.get("#progress").textContent, /成功 8/);
+    assert.equal(elements.get("#pause").hidden, true);
+  });
+}
+
+test("popup updates dashboard metrics and progress bar when elements exist", async () => {
+  const elements = new Map(["#business", "#start", "#stop", "#retry", "#pause", "#resume", "#export-logs", "#status",
+    "#progress", "#completion", "#error", "#interruption", "#logs", "#copy-logs", "#copy-status",
+    "#status-badge", "#stat-total", "#stat-completed", "#stat-skipped", "#stat-failed", "#progress-bar-fill", "#progress-percent"].map(selector => [selector, {
+    hidden: false, disabled: false, textContent: "", value: "", dataset: {}, style: {}, scrollHeight: 0,
+    listeners: {}, addEventListener(event, listener) { this.listeners[event] = listener; }, focus() {}, select() {}
+  }]));
+  const sandbox = {
+    document: { querySelector: selector => elements.get(selector), execCommand: () => true },
+    chrome: { runtime: { sendMessage: async () => ({ ok: true, task: { status: "running", phase: "processing", total: 10, page: 1, scanned: 4, completed: 3, skipped: 1, failed: 0, currentRows: [{}], logs: [] } }) }, tabs: { query: async () => [] } },
+    location: { search: "", href: "https://fixture.test/popup.html" }, URLSearchParams, URL, history: { replaceState() {} },
+    navigator: { clipboard: { writeText: async () => {} } },
+    window: { addEventListener() {} },
+    setInterval: () => 1, clearInterval() {}, Date, console
+  };
+  vm.runInNewContext(fs.readFileSync(require.resolve("../popup.js"), "utf8"), sandbox);
+  await new Promise(setImmediate);
+  assert.equal(elements.get("#stat-total").textContent, "10");
+  assert.equal(elements.get("#stat-completed").textContent, "3");
+  assert.equal(elements.get("#stat-skipped").textContent, "1");
+  assert.equal(elements.get("#stat-failed").textContent, "0");
+  assert.equal(elements.get("#progress-bar-fill").style.width, "40%");
+  assert.equal(elements.get("#progress-percent").textContent, "40%");
+  assert.equal(elements.get("#status-badge").textContent, "正在处理订单资料");
+  assert.equal(elements.get("#status-badge").dataset.status, "running");
 });

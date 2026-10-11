@@ -169,6 +169,19 @@ test('digital malformed groups fail and special names remain actual image fields
   }
 });
 
+test('digital duplicate labels avoid natural numbered names without losing fields', async () => {
+  const names = ['照片', '照片', '照片-1', '照片-2', '照片-3'];
+  const fields = names.map((desc, i) => ({ type: 'img', key: 'img' + i, desc, required: true }));
+  const product = Object.fromEntries(fields.map((field, i) => [field.key, 'image' + i]));
+  const fetcher = async url => response(url.endsWith('queryDtl') ? { templateId: 'T', productJson: product } : { productJson: [{ its: fields }] });
+  const read = () => site.makeClient('fixture', fetcher).assets({ id: 'O', mchntId: 'M' }, 'https://portal.test', 'digital');
+  const first = await read();
+  assert.equal(Object.keys(first.files).length, fields.length);
+  assert.deepEqual(Object.keys(first.files), Object.keys((await read()).files));
+  assert.deepEqual(Object.values(first.files).map(url => new URL(url).pathname.split('/').at(-1)), fields.map((_, i) => 'image' + i));
+  for (const name of names.slice(2)) assert.ok(Object.hasOwn(first.files, name));
+});
+
  test('appliance missing required images takes precedence over ambiguous proof', async () => {
   for (const missing of [true, false]) {
     const fetcher = async url => response(url.endsWith('queryDtl') ? { templateId: 'T', productJson: { sn: 'sn', invoice: missing ? '' : 'invoice', p1: 'proof1', p2: 'proof2' } } : { productJson: [{ its: [

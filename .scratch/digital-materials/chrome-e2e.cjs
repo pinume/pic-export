@@ -26,13 +26,13 @@ function connect(endpoint) {
 const root=fs.mkdtempSync('/private/tmp/pic-digital-e2e-');
 const cfg={root,profile:path.join(root,'profile'),extension:path.join(root,'extension'),downloads:path.join(root,'downloads'),port:9225};
 for(const dir of [cfg.profile,cfg.extension,cfg.downloads,path.join(cfg.profile,'Default')])fs.mkdirSync(dir,{recursive:true});
-for(const file of ['core.js','page-core.js','site-api.js','content.js','background.js','store.js','order-downloads.js','popup.js','popup.html','entry.js','entry.html','styles.css','favicon.ico','logo.png'])fs.copyFileSync(path.join(repo,file),path.join(cfg.extension,file));
+for(const file of ['core.js','page-core.js','site-api.js','content.js','background.js','store.js','order-downloads.js','popup.js','popup.html','entry.js','entry.html','merchant.js','styles.css','favicon.ico','logo.png'])fs.copyFileSync(path.join(repo,file),path.join(cfg.extension,file));
 const manifest=JSON.parse(fs.readFileSync(path.join(repo,'manifest.json')));
 manifest.host_permissions=['http://127.0.0.1/*'];
 fs.writeFileSync(path.join(cfg.extension,'manifest.json'),JSON.stringify(manifest));
 fs.writeFileSync(path.join(cfg.extension,'popup.js'),fs.readFileSync(path.join(repo,'popup.js'),'utf8').replace('https://service.chinaums.com/*','http://127.0.0.1/*'));
 fs.writeFileSync(path.join(cfg.profile,'Default/Preferences'),JSON.stringify({download:{default_directory:cfg.downloads,prompt_for_download:false,directory_upgrade:true}}));
-let account='original',business='digital',token='session-1',hold=true;
+let account='original',business='digital',token='session-1',hold=true,merchantMode='supported';
 const rows=[1,2,3,4].map(n=>({merOrderId:'O'+n,transRef:'R'+n,id:'O'+n,mchntId:'M',status:'S02'}));
 const images=new Map(),events=[];
 const digitalFields=[
@@ -47,6 +47,14 @@ const server=http.createServer(async(req,res)=>{
  if(u.pathname==='/'){
   res.writeHead(200,{'Content-Type':'text/html;charset=utf-8'});
   res.end('<div class="userInfo"><span class="loginName">'+account+'</span></div><div class="search-item"><label>交易日期*</label><input value="2026/10/01 ~ 2026/10/11"></div><div class="search-item"><label>订单状态</label><input class="el-input__inner" value=""></div><div class="el-table"><div class="el-table__header-wrapper"><table><thead><tr><th>订单号</th><th>参考号</th></tr></thead></table></div><div class="el-table__body-wrapper"><table><tbody>'+rows.map(r=>'<tr><td>'+r.merOrderId+'</td><td>'+r.transRef+'</td></tr>').join('')+'</tbody></table></div></div><div class="el-pagination"><div class="el-pagination__sizes"><select><option>4</option></select></div><div class="el-pager"><span class="active">1</span></div><span class="el-pagination__total">共 4 条</span></div><script>localStorage.setItem("userPortalVerifyToken",'+JSON.stringify(token)+');fetch("/uisportal/api/uis-tradein-server/portal/yjhx/v3/queryList",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({current:0,size:4})}).then(()=>window.fixtureReady=true)</script>');return;
+ }
+ if(u.pathname==='/uisportal/merInfoUser/businessCenter'){
+  assert.equal(req.headers['x-requested-with'],'XMLHttpRequest');
+  if(merchantMode==='error'){res.writeHead(500);res.end();return;}
+  const number=merchantMode==='unsupported'?'898000000000001':business==='digital'?'89813014812B06R':'89813015722APT1';
+  const field=(label,value)=>'<li><div class="leftTitle">'+label+':</div><div class="rightCont">'+value+'</div></li>';
+  res.writeHead(200,{'Content-Type':'text/html;charset=utf-8'});
+  res.end(merchantMode==='login'?'<form>登录</form>':'<ul>'+field('商户编号',number)+field('商户名称','测试商户')+(merchantMode==='ambiguous'?field('商户编号',number):'')+'</ul>');return;
  }
  let body='';for await(const c of req)body+=c;const params=body?JSON.parse(body):{};
  const reply=data=>{res.writeHead(200,{'Content-Type':'application/json'});res.end(JSON.stringify({success:true,data}));};
@@ -71,6 +79,7 @@ async function main(){
   cdp=await connect(version.webSocketDebuggerUrl);
   const {id}=await cdp.send('Extensions.loadUnpacked',{path:cfg.extension});
   const fixture='http://127.0.0.1:'+server.address().port+'/#/auditOfTrade2026';
+  fs.writeFileSync(path.join(cfg.extension,'entry.js'),fs.readFileSync(path.join(repo,'entry.js'),'utf8').replaceAll('https://service.chinaums.com/*','http://127.0.0.1/*'));
   const {targetId}=await cdp.send('Target.createTarget',{url:fixture});
   const source=(await cdp.send('Target.attachToTarget',{targetId,flatten:true})).sessionId;
   const evaluate=async(session,expression)=>{const r=await cdp.send('Runtime.evaluate',{expression,returnByValue:true,awaitPromise:true},session);if(r.exceptionDetails)throw Error(r.exceptionDetails.exception?.description||r.exceptionDetails.text);return r.result.value;};
@@ -81,6 +90,10 @@ async function main(){
    await cdp.send('Extensions.triggerAction',{id,targetId:tab.targetId});
    const entry=await until(async()=>(await cdp.send('Target.getTargets')).targetInfos.find(t=>t.url.endsWith('/entry.html')),'entry popup');
    const session=(await cdp.send('Target.attachToTarget',{targetId:entry.targetId,flatten:true})).sessionId;
+   await until(()=>evaluate(session,'document.querySelector("#merchant-number")?.textContent.length>0'),'merchant detection');
+   assert.equal(await evaluate(session,'document.querySelector("#'+(type==='digital'?'digital':'entry')+'-card").hidden'),false);
+   assert.equal(await evaluate(session,'document.querySelector("#'+(type==='digital'?'entry':'digital')+'-card").hidden'),true);
+   assert.match(await evaluate(session,'document.querySelector("#merchant-number").textContent'),new RegExp(type==='digital'?'89813014812B06R':'89813015722APT1'));
    await evaluate(session,'document.querySelector('+JSON.stringify(type==='digital'?'#open-digital':'#open-task')+').click()');
    const task=await until(async()=>(await cdp.send('Target.getTargets')).targetInfos.find(t=>t.url.includes('/popup.html?')&&t.url.includes('business='+type)),'task page');
    const taskSession=(await cdp.send('Target.attachToTarget',{targetId:task.targetId,flatten:true})).sessionId;
@@ -99,12 +112,17 @@ async function main(){
   const paused=await until(async()=>{const t=await state(digital,'digital');return t?.status==='paused'?t:null;},'pause');
   const before=(await evaluate(digital,'chrome.downloads.search({})')).filter(d=>d.filename.endsWith('.png'));
   assert.equal(paused.id,first.id);
-  account='wrong';token='session-2';
-  await cdp.send('Page.reload',{},source);await until(()=>evaluate(source,'Boolean(window.fixtureReady)'),'wrong account');
+  account='other';token='session-2';hold=true;
+  await cdp.send('Page.reload',{},source);await until(()=>evaluate(source,'Boolean(window.fixtureReady)'),'changed login');
+  await until(()=>evaluate(digital,'!document.querySelector("#resume").hidden&&!document.querySelector("#resume").disabled'),'resume ready');
   await evaluate(digital,'document.querySelector("#resume").click()');
-  await until(()=>evaluate(digital,'document.querySelector("#error").textContent.includes("账号")'),'account rejected');
-  assert.equal((await state(digital,'digital')).status,'paused');
-  const appliance=await open('appliance');business='appliance';
+  await until(async()=> (await state(digital,'digital'))?.status==='running','manual selection resume');
+  await until(()=>evaluate(digital,'!document.querySelector("#pause").hidden'),'pause resumed task');
+  await evaluate(digital,'document.querySelector("#pause").click()');
+  await until(async()=> (await state(digital,'digital'))?.status==='pausing','second pause requested');
+  hold=false;
+  await until(async()=> (await state(digital,'digital'))?.status==='paused','second pause');
+  business='appliance';const appliance=await open('appliance');
   await evaluate(appliance,'document.querySelector("#start").click()');
   const a=await until(async()=>{const t=await state(appliance,'appliance');return t?.status==='completed'?t:null;},'appliance complete');
   assert.equal(a.completed,3);assert.equal(a.skipped,1);
@@ -114,6 +132,7 @@ async function main(){
   const lost=before.find(d=>d.filename.includes('/R1/'));
   assert.ok(lost);
   await evaluate(digital,'chrome.downloads.removeFile('+lost.id+')');
+  await until(()=>evaluate(digital,'!document.querySelector("#resume").hidden&&!document.querySelector("#resume").disabled'),'resume ready');
   await evaluate(digital,'document.querySelector("#resume").click()');
   const done=await until(async()=>{const t=await state(digital,'digital');return t?.status==='completed'?t:null;},'digital complete');
   assert.ok(fs.existsSync(lost.filename));
@@ -124,7 +143,19 @@ async function main(){
   assert.equal(fs.existsSync(path.join(dir,'R4')),false);
   const csv=fs.readFileSync(path.join(dir,'下载清单.csv'),'utf8');assert.match(csv,/O4,R4,跳过,必填图片缺失：发票图片/);assert.equal(csv.split('\r\n').length,5);
   for(const item of before.filter(d=>!d.filename.includes('/R1/')))assert.equal((await evaluate(digital,'chrome.downloads.search({filenameRegex:'+JSON.stringify(item.filename.replace(/[.*+?^$()|[\]\\]/g,'\\$&'))+'})')).length,1);
-  const result={outcome:'passed',browser:version.Browser,root,checks:['two actual entry buttons','digital template filenames and bytes','optional IMEI and proof','missing required invoice skip','pause and page reload','wrong account rejected','separate business tasks','appliance rules','same-account new token resume','no duplicate completed images','missing-file recovery'],digitalImages:11,applianceImages:6,fixtureAdaptation:'localhost permission and source-tab URL pattern only'};
+  const previewId=(await cdp.send('Target.createTarget',{url:'chrome-extension://'+id+'/entry.html'})).targetId;
+  const preview=(await cdp.send('Target.attachToTarget',{targetId:previewId,flatten:true})).sessionId;
+  await until(()=>evaluate(preview,'document.querySelector("#merchant-number")?.textContent.length>0'),'merchant preview');
+  await cdp.send('Emulation.setDeviceMetricsOverride',{width:360,height:520,deviceScaleFactor:1,mobile:false},preview);
+  fs.writeFileSync('/private/tmp/pic-merchant-entry.png',Buffer.from((await cdp.send('Page.captureScreenshot',{},preview)).data,'base64'));
+  for(const mode of ['unsupported','login','ambiguous','error']){
+   merchantMode=mode;
+   await cdp.send('Page.reload',{},preview);
+   await until(()=>evaluate(preview,'document.querySelector("#entry-error")?.textContent.length>0'),'merchant '+mode);
+   assert.equal(await evaluate(preview,'document.querySelector("#entry-card").hidden&&document.querySelector("#digital-card").hidden'),true);
+  }
+  await cdp.send('Target.closeTarget',{targetId:previewId});
+  const result={outcome:'passed',browser:version.Browser,root,checks:['merchant name and number from live HTML','only matching entry visible','unsupported login ambiguous and HTTP failures hide entries','two actual entry buttons','digital template filenames and bytes','optional IMEI and proof','missing required invoice skip','pause and page reload','manual selection accepts changed login','separate business tasks','appliance rules','same-account new token resume','no duplicate completed images','missing-file recovery'],digitalImages:11,applianceImages:6,fixtureAdaptation:'localhost permission and source-tab URL pattern only'};
   fs.writeFileSync(path.join(__dirname,'e2e-result.json'),JSON.stringify(result,null,2));console.log(JSON.stringify(result,null,2));
  }catch(e){console.error(JSON.stringify(diagnostic?await diagnostic():{error:e.message},null,2));throw e;}finally{if(cdp){await cdp.send('Browser.close').catch(()=>{});cdp.close();}else chrome.kill();server.closeAllConnections();server.close();}
 }

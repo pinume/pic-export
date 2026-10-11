@@ -65,7 +65,7 @@ function harness(options = {}, initial = null) {
     }
   });
   vm.runInContext(fs.readFileSync(path.join(__dirname, "../background.js"), "utf8"), sandbox);
-  const send = (message, source = sender) => new Promise(resolve => listener({ ...message, ...(["PIC_EXPERT_TASK_BEGIN", "PIC_EXPERT_TASK_RESUME"].includes(message.type) && !message.accountId ? {accountId:"a".repeat(64)} : {}) }, source, resolve));
+  const send = (message, source = sender) => new Promise(resolve => listener(message, source, resolve));
   const begin = (tradeDateRange = ["20261001", "20261004"]) => send({ type: "PIC_EXPERT_TASK_BEGIN", tabId: 7, frameId: 4, tradeDateRange }, {});
   const pair = taskId => send({ type: "PIC_EXPERT_DOWNLOAD_PAIR", taskId, orderNo: "O1", referenceNo: "R1", assets });
   return { send, begin, pair, calls, removed, items, store, notify, handlers, task: () => store.snapshot() };

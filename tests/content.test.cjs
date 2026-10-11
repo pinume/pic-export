@@ -243,17 +243,17 @@ test("changed checkpoint page stops before retrying earlier pages", async () => 
 test('digital task saves all template images and skips a missing required field without partial download', async () => {
   for (const missing of [false,true]) {
     const h=harness([[row('O1','R1')]], {assets: () => ({files:{'手机系统SN码照':'https://portal.test/sn','SN码和包装盒的二合一照':'https://portal.test/box','手机系统IMEI码照':'https://portal.test/imei','发票图片':'https://portal.test/invoice'},missing:missing?['必填图片缺失：手机系统IMEI码照']:[],notices:[]})});
-    await h.run('T1',null,{business:'digital',accountId:'a'.repeat(64)});
+    await h.run('T1',null,{business:'digital'});
     const result=h.messages.find(m=>m.type==='PIC_EXPERT_MANIFEST_ROW').row;
     assert.equal(result.result,missing?'跳过':'成功');
     const download=h.messages.find(m=>m.type==='PIC_EXPERT_DOWNLOAD_PAIR');
     if(missing){assert.equal(download,undefined);assert.match(result.reason,/手机系统IMEI码照/);}else assert.deepEqual(Object.keys(download.assets).sort(),['手机系统SN码照','SN码和包装盒的二合一照','手机系统IMEI码照','发票图片'].sort());
   }
 });
-test('a changed source account pauses before saving images', async () => {
-  let name='original';
-  const h=harness([[row('O1','R1')]],{accountName:()=>name,fetch:async()=>{name='other';return {ok:true,status:200,blob:async()=>new Blob([new Uint8Array([255,216,255])])};}});
-  await h.run('T1',null,{business:'appliance',accountId:'a'.repeat(64)});
+test('a changed login token pauses before saving images', async () => {
+  let token='original';
+  const h=harness([[row('O1','R1')]],{token:()=>token,fetch:async()=>{token='other';return {ok:true,status:200,blob:async()=>new Blob([new Uint8Array([255,216,255])])};}});
+  await h.run('T1',null,{business:'appliance'});
   assert.equal(h.messages.some(m=>m.type==='PIC_EXPERT_DOWNLOAD_PAIR'),false);
   assert.equal(h.messages.at(-1).type,'PIC_EXPERT_TASK_AUTO_PAUSE');
 });
