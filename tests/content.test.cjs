@@ -76,8 +76,8 @@ test("material modification is a CSV note on success, missing required images an
     const h = harness([[{ ...row("O1", "R1", "H03"), statusDesc: "材料修改" }]], {
       assets: () => {
         if (mode === "failure") throw new Error("读取详情失败");
-        return { "SN码": ["https://portal.test/sn"], "发票": mode === "missing" ? [] : ["https://portal.test/invoice"],
-          "证明材料图一": [], "证明材料图二": [], "证明材料图三": [] };
+        return { files: { "SN码": "https://portal.test/sn", "发票": "https://portal.test/invoice" },
+          missing: mode === "missing" ? ["SN码或发票图片缺失"] : [], notices: [] };
       }
     });
     await h.run("T1");
@@ -242,7 +242,7 @@ test("changed checkpoint page stops before retrying earlier pages", async () => 
 
 test('digital task saves all template images and skips a missing required field without partial download', async () => {
   for (const missing of [false,true]) {
-    const h=harness([[row('O1','R1')]], {assets: () => ({files:{'手机系统SN码照':'https://portal.test/sn','SN码和包装盒的二合一照':'https://portal.test/box','手机系统IMEI码照':'https://portal.test/imei','发票图片':'https://portal.test/invoice'},missing:missing?['手机系统IMEI码照']:[]})});
+    const h=harness([[row('O1','R1')]], {assets: () => ({files:{'手机系统SN码照':'https://portal.test/sn','SN码和包装盒的二合一照':'https://portal.test/box','手机系统IMEI码照':'https://portal.test/imei','发票图片':'https://portal.test/invoice'},missing:missing?['必填图片缺失：手机系统IMEI码照']:[],notices:[]})});
     await h.run('T1',null,{business:'digital',accountId:'a'.repeat(64)});
     const result=h.messages.find(m=>m.type==='PIC_EXPERT_MANIFEST_ROW').row;
     assert.equal(result.result,missing?'跳过':'成功');

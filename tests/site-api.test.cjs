@@ -118,10 +118,11 @@ test("detail and template responses map labeled image fields to download URLs", 
     "/uisportal/api/uis-tradein-server/portal/yjhx/v3/queryDtl",
     "/uisportal/api/uis-tradein-server/portal/yjhx/v3/queryTemplateInfo/template-1"
   ]);
-  assert.match(assets["SN码"][0], /img\/tradein\/download\/sn-id\?userPortalToken=secret/);
-  assert.match(assets["发票"][0], /img\/tradein\/download\/invoice-id\?userPortalToken=secret/);
-  assert.match(assets["证明材料图三"][0], /img\/tradein\/download\/proof-id\?userPortalToken=secret/);
-  assert.deepEqual(assets["证明材料图一"], []);
+  assert.match(assets.files["SN码"], /img\/tradein\/download\/sn-id\?userPortalToken=secret/);
+  assert.match(assets.files["发票"], /img\/tradein\/download\/invoice-id\?userPortalToken=secret/);
+  assert.match(assets.files["证明材料图三"], /img\/tradein\/download\/proof-id\?userPortalToken=secret/);
+  assert.deepEqual(assets.missing, []);
+  assert.deepEqual(assets.notices, ["证明材料图一为空，跳过", "证明材料图二为空，跳过"]);
 });
 
 test("unknown status tags and rejected API requests fail closed", async () => {
@@ -142,15 +143,16 @@ test("multiple required image addresses are returned in template order with dupl
     ] }] });
   });
   const found = await client.assets({ id: "O1", mchntId: "merchant" }, "https://portal.test");
-  assert.deepEqual(found["SN码"].map(url => new URL(url).pathname.split("/").at(-1)), ["sn1", "sn2"]);
-  assert.deepEqual(found["发票"].map(url => new URL(url).pathname.split("/").at(-1)), ["inv1", "inv2"]);
-  assert.deepEqual(found["证明材料图三"], []);
+  assert.deepEqual([found.files["SN码-1"], found.files["SN码-2"]].map(url => new URL(url).pathname.split("/").at(-1)), ["sn1", "sn2"]);
+  assert.deepEqual([found.files["发票-1"], found.files["发票-2"]].map(url => new URL(url).pathname.split("/").at(-1)), ["inv1", "inv2"]);
+  assert.deepEqual(Object.keys(found.files), ["SN码-1", "SN码-2", "发票-1", "发票-2"]);
 });
 test('digital templates preserve distinct names, optional fields and required missing names', async () => {
   const fetcher=async url=>response(url.includes('queryDtl')?{templateId:'T',productJson:{img1:'sn',img2:'box',proof:'proof'}}:{productJson:[{its:[{type:'img',key:'img1',desc:'（必填）手机系统SN码照',required:true},{type:'img',key:'img2',desc:'（必填）SN码和包装盒的二合一照',required:true},{type:'img',key:'img3',desc:'系统IMEI码照片',required:false},{type:'img',key:'invoice',desc:'（必填）发票图片',required:true},{type:'img',key:'proof',desc:'证明材料图三',required:false}]}]});
   const result=await site.makeClient('session',fetcher).assets({mchntId:'M',id:'O'},'https://portal.test','digital');
   assert.deepEqual(Object.keys(result.files),['手机系统SN码照','SN码和包装盒的二合一照','证明材料图三']);
-  assert.deepEqual(result.missing,['发票图片']);
+  assert.deepEqual(result.missing,['必填图片缺失：发票图片']);
+  assert.deepEqual(result.notices, []);
 });
 test('digital unknown labels are saved safely and malformed values fail', async () => {
   for(const value of ['image', {url:'image'}]){
@@ -164,5 +166,17 @@ test('digital malformed groups fail and special names remain actual image fields
     const fetcher=async url=>response(url.includes('queryDtl')?{templateId:'T',productJson:{a:'image'}}:{productJson:groups});
     const result=site.makeClient('session',fetcher).assets({mchntId:'M',id:'O'},'https://portal.test','digital');
     if(groups.length===1)assert.deepEqual(Object.keys((await result).files),['__proto__']);else await assert.rejects(result,/模板/);
+  }
+});
+
+ test('appliance missing required images takes precedence over ambiguous proof', async () => {
+  for (const missing of [true, false]) {
+    const fetcher = async url => response(url.endsWith('queryDtl') ? { templateId: 'T', productJson: { sn: 'sn', invoice: missing ? '' : 'invoice', p1: 'proof1', p2: 'proof2' } } : { productJson: [{ its: [
+      { type: 'img', key: 'sn', desc: 'SN码' }, { type: 'img', key: 'invoice', desc: '发票' },
+      { type: 'img', key: 'p1', desc: '证明材料图一' }, { type: 'img', key: 'p2', desc: '证明材料图一' }
+    ] }] });
+    const read = site.makeClient('session', fetcher).assets({ id: 'O', mchntId: 'M' }, 'https://portal.test');
+    if (missing) assert.deepEqual((await read).missing, ['SN码或发票图片缺失']);
+    else await assert.rejects(read, /证明材料图一图片不唯一，已停止该订单下载。/);
   }
 });

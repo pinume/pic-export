@@ -175,7 +175,7 @@
             if (!cleanText(value)) { if (item.required) missing.push(name); continue; }
             files[name] = imageUrl(cleanText(value), origin, token);
           }
-          return { files, missing };
+          return { files, missing: missing.length ? ["必填图片缺失：" + missing.join("、")] : [], notices: [] };
         }
         const found = {};
         for (const item of groups.flatMap(group => Array.isArray(group?.its) ? group.its : [])) {
@@ -187,7 +187,16 @@
           const url = imageUrl(value, origin, token);
           (found[kind] ||= new Set()).add(url);
         }
-        return Object.fromEntries(globalThis.PIC_EXPERT_CORE.ASSET_KINDS.map(kind => [kind, [...(found[kind] || [])]]));
+        const { ASSET_KINDS, REQUIRED_KINDS, PROOF_KINDS } = globalThis.PIC_EXPERT_CORE;
+        const missing = REQUIRED_KINDS.some(kind => !found[kind]?.size) ? ["SN码或发票图片缺失"] : [];
+        if (!missing.length) {
+          for (const kind of PROOF_KINDS) if (found[kind]?.size > 1) throw new Error(kind + "图片不唯一，已停止该订单下载。");
+        }
+        const files = Object.fromEntries(ASSET_KINDS.flatMap(kind => {
+          const urls = [...(found[kind] || [])];
+          return urls.map((url, i) => [urls.length > 1 ? kind + "-" + (i + 1) : kind, url]);
+        }));
+        return { files, missing, notices: PROOF_KINDS.filter(kind => !found[kind]?.size).map(kind => kind + "为空，跳过") };
       }
     };
   };

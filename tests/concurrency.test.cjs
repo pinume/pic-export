@@ -192,9 +192,7 @@ test("three overlapping orders keep every numbered image in its own reference fo
   const gate = imageGate();
   const rows = [row("O1", "R1", "04"), { ...row("O2", "R2", "08"), statusDesc: "待审核", statusText: "材料修改" }, row("O3", "R3", "S03")];
   const f = await flow(t, [rows], { content: { fetch: gate.fetch, assets: order => ({
-    "SN码": ["s1", "s2"].map(name => "https://portal.test/" + order.transRef + "/" + name),
-    "发票": ["i1", "i2", "i3"].map(name => "https://portal.test/" + order.transRef + "/" + name),
-    "证明材料图一": [], "证明材料图二": [], "证明材料图三": []
+    files: Object.fromEntries([["SN码-1", "s1"], ["SN码-2", "s2"], ["发票-1", "i1"], ["发票-2", "i2"], ["发票-3", "i3"]].map(([name, path]) => [name, "https://portal.test/" + order.transRef + "/" + path])), missing: [], notices: []
   }) } });
   const running = f.page.run(f.task.id);
   await until(() => gate.live() === 6);
@@ -229,9 +227,7 @@ test("failure of a later numbered image rolls back every file of only that order
   const f = await flow(t, [[{ ...row("O1", "R1"), statusDesc: "材料修改" }, row("O2", "R2")]], {
     downloads: { failFilename: "/R1/发票-2.jpg" },
     content: { assets: order => ({
-      "SN码": ["s1", "s2"].map(name => "https://portal.test/" + order.transRef + "/" + name),
-      "发票": ["i1", "i2"].map(name => "https://portal.test/" + order.transRef + "/" + name),
-      "证明材料图一": [], "证明材料图二": [], "证明材料图三": []
+      files: Object.fromEntries([["SN码-1", "s1"], ["SN码-2", "s2"], ["发票-1", "i1"], ["发票-2", "i2"]].map(([name, path]) => [name, "https://portal.test/" + order.transRef + "/" + path])), missing: [], notices: []
     }) }
   });
   await f.page.run(f.task.id);

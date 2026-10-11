@@ -25,8 +25,9 @@ function harness(pages, options = {}) {
         return { rows: pages[page] || [], total: pages.reduce((count, rows) => count + rows.length, 0) };
       },
       async assets(row) {
-        return options.assets?.(row) || Object.fromEntries(fileCore.ASSET_KINDS.map(kind =>
-          [kind, fileCore.REQUIRED_KINDS.includes(kind) ? ["https://portal.test/" + row.transRef + "/" + kind] : []]));
+        return options.assets?.(row) || { files: Object.fromEntries(fileCore.REQUIRED_KINDS.map(kind =>
+          [kind, "https://portal.test/" + row.transRef + "/" + kind])), missing: [],
+          notices: fileCore.PROOF_KINDS.map(kind => kind + "为空，跳过") };
       }
     })
   };

@@ -73,17 +73,10 @@
       await log("读取详情", "订单 " + id.orderNo + "，参考号 " + id.referenceNo);
       const states = await client.assets(row, location.origin, business);
       ensureActive();
-      if (business === "digital" && states.missing.length) {
-        return { ...id, result: "跳过", reason: reason("必填图片缺失：" + states.missing.join("、")) };
+      if (states.missing.length) {
+        return { ...id, result: "跳过", reason: reason(states.missing.join("；")) };
       }
-      if (business !== "digital" && FILES.REQUIRED_KINDS.some(kind => !states[kind]?.length)) {
-        return { ...id, result: "跳过", reason: reason("SN码或发票图片缺失") };
-      }
-      for (const kind of business === "digital" ? [] : FILES.PROOF_KINDS) {
-        if (states[kind].length > 1) throw new Error(kind + "图片不唯一，已停止该订单下载。");
-      }
-      const assets = business === "digital" ? states.files : Object.fromEntries(FILES.ASSET_KINDS.flatMap(kind => states[kind].map((url, i, urls) =>
-        [urls.length > 1 ? kind + "-" + (i + 1) : kind, url])));
+      const assets = states.files;
       const kinds = Object.keys(assets);
       const prepared = Object.create(null);
       let cursor = 0;
@@ -103,7 +96,7 @@
       const failure = results.find(result => result.status === "rejected" && result.reason.auth) ||
         results.find(result => result.status === "rejected");
       if (failure) throw failure.reason;
-      for (const kind of business === "digital" ? [] : FILES.PROOF_KINDS) if (!assets[kind]) await log("证明材料", kind + "为空，跳过");
+      for (const notice of states.notices) await log("证明材料", notice);
       ensureActive();
       await checkedSend({ type: "PIC_EXPERT_DOWNLOAD_PAIR", taskId, ...id, assets: prepared, note });
       return { ...id, result: "成功", reason: note };
