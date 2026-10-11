@@ -4,7 +4,7 @@ const vm = require("node:vm");
 const fs = require("node:fs");
 
 const loadPopup = async task => {
-  const elements = new Map(["#start", "#stop", "#retry", "#pause", "#resume", "#export-logs", "#status",
+  const elements = new Map(["#business", "#start", "#stop", "#retry", "#pause", "#resume", "#export-logs", "#status",
     "#progress", "#completion", "#error", "#interruption", "#logs", "#copy-logs", "#copy-status"].map(selector => [selector, {
     hidden: false, disabled: false, textContent: "", value: "", dataset: {}, scrollHeight: 0,
     addEventListener() {}, focus() {}, select() {}

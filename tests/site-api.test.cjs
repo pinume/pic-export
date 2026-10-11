@@ -146,3 +146,23 @@ test("multiple required image addresses are returned in template order with dupl
   assert.deepEqual(found["发票"].map(url => new URL(url).pathname.split("/").at(-1)), ["inv1", "inv2"]);
   assert.deepEqual(found["证明材料图三"], []);
 });
+test('digital templates preserve distinct names, optional fields and required missing names', async () => {
+  const fetcher=async url=>response(url.includes('queryDtl')?{templateId:'T',productJson:{img1:'sn',img2:'box',proof:'proof'}}:{productJson:[{its:[{type:'img',key:'img1',desc:'（必填）手机系统SN码照',required:true},{type:'img',key:'img2',desc:'（必填）SN码和包装盒的二合一照',required:true},{type:'img',key:'img3',desc:'系统IMEI码照片',required:false},{type:'img',key:'invoice',desc:'（必填）发票图片',required:true},{type:'img',key:'proof',desc:'证明材料图三',required:false}]}]});
+  const result=await site.makeClient('session',fetcher).assets({mchntId:'M',id:'O'},'https://portal.test','digital');
+  assert.deepEqual(Object.keys(result.files),['手机系统SN码照','SN码和包装盒的二合一照','证明材料图三']);
+  assert.deepEqual(result.missing,['发票图片']);
+});
+test('digital unknown labels are saved safely and malformed values fail', async () => {
+  for(const value of ['image', {url:'image'}]){
+    const fetcher=async url=>response(url.includes('queryDtl')?{templateId:'T',productJson:{img:value}}:{productJson:[{its:[{type:'img',key:'img',desc:'新资料/照片',required:false}]}]});
+    const read=site.makeClient('session',fetcher).assets({mchntId:'M',id:'O'},'https://portal.test','digital');
+    if(typeof value==='string')assert.deepEqual(Object.keys((await read).files),['新资料_照片']);else await assert.rejects(read,/格式/);
+  }
+});
+test('digital malformed groups fail and special names remain actual image fields', async () => {
+  for(const groups of [[{its:[{type:'img',key:'a',desc:'__proto__',required:true}]}],[{its:[{type:'img',key:'a',desc:'照片',required:true}]},{its:{hiddenRequired:true}}]]){
+    const fetcher=async url=>response(url.includes('queryDtl')?{templateId:'T',productJson:{a:'image'}}:{productJson:groups});
+    const result=site.makeClient('session',fetcher).assets({mchntId:'M',id:'O'},'https://portal.test','digital');
+    if(groups.length===1)assert.deepEqual(Object.keys((await result).files),['__proto__']);else await assert.rejects(result,/模板/);
+  }
+});

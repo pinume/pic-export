@@ -50,6 +50,7 @@
         }
         if (legacy.storeVersion !== 1) await this.storage.set({ picExpertTask: { id: legacy.id, storeVersion: 1 } });
         this.activeId = legacy.id;
+        this.taskIds = legacy.taskIds || { appliance: legacy.id };
       })().catch(error => { this.initializing = null; throw error; });
       return this.initializing;
     }
@@ -102,14 +103,21 @@
     async save(task, changes = {}) {
       await this.ready();
       await this.commit(task, changes);
-      if (this.activeId !== task.id) {
-        await this.storage.set({ picExpertTask: { id: task.id, storeVersion: 1 } });
+      if (this.activeId !== task.id || this.taskIds?.[task.business || "appliance"] !== task.id) {
+        const taskIds = { ...this.taskIds, [task.business || "appliance"]: task.id };
+        await this.storage.set({ picExpertTask: { id: task.id, storeVersion: 1, taskIds } });
+        this.taskIds = taskIds;
         this.activeId = task.id;
       }
     }
-    async getTask() {
+    async getBusinessTask(business) {
       await this.ready();
-      return this.activeId ? this.read("tasks", this.activeId) : null;
+      const id = this.taskIds?.[business];
+      return id ? this.read("tasks", id) : null;
+    }
+    async getTask(id) {
+      await this.ready();
+      return (id || this.activeId) ? this.read("tasks", id || this.activeId) : null;
     }
     async getRow(taskId, identity) { return (await this.read("rows", [taskId, JSON.stringify([identity.orderNo, identity.referenceNo])]))?.value || null; }
     async getPair(taskId, referenceNo) { return (await this.read("pairs", [taskId, referenceNo]))?.value || null; }

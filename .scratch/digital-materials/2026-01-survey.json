@@ -1,0 +1,797 @@
+{
+  "month": "2026-01",
+  "total": 740,
+  "unique": 740,
+  "processed": 740,
+  "errors": [],
+  "templates": {
+    "69554ae742e1b798df3022c9": {
+      "orders": 135,
+      "fields": [
+        {
+          "key": "snCode",
+          "type": "text",
+          "label": "请输入或扫描序列号",
+          "required": true,
+          "keys": [
+            "name",
+            "type",
+            "key",
+            "required",
+            "desc",
+            "isScan"
+          ]
+        },
+        {
+          "key": "isAI",
+          "type": "select",
+          "label": "请选择是否属于AI产品",
+          "required": true,
+          "keys": [
+            "values",
+            "name",
+            "type",
+            "key",
+            "required",
+            "desc",
+            "isScan"
+          ]
+        },
+        {
+          "key": "imei1",
+          "type": "text",
+          "label": "如有必填，如无请置空",
+          "required": false,
+          "keys": [
+            "name",
+            "type",
+            "key",
+            "required",
+            "desc",
+            "isScan"
+          ]
+        },
+        {
+          "key": "imei2",
+          "type": "text",
+          "label": "如有必填，如无请置空",
+          "required": false,
+          "keys": [
+            "name",
+            "type",
+            "key",
+            "required",
+            "desc",
+            "isScan"
+          ]
+        },
+        {
+          "key": "isOldExchange",
+          "type": "select",
+          "label": "请选择是否交旧",
+          "required": true,
+          "keys": [
+            "values",
+            "name",
+            "type",
+            "key",
+            "required",
+            "desc",
+            "isScan"
+          ]
+        },
+        {
+          "key": "img1",
+          "type": "img",
+          "label": "（必填）商品SN照片  ",
+          "required": true,
+          "keys": [
+            "name",
+            "type",
+            "key",
+            "required",
+            "desc",
+            "isScan"
+          ]
+        },
+        {
+          "key": "img2",
+          "type": "img",
+          "label": "（必填）产品系统和包装盒SN码的二合一照",
+          "required": true,
+          "keys": [
+            "name",
+            "type",
+            "key",
+            "required",
+            "desc",
+            "isScan"
+          ]
+        },
+        {
+          "key": "img3",
+          "type": "img",
+          "label": "系统IMEI码照片",
+          "required": false,
+          "keys": [
+            "name",
+            "type",
+            "key",
+            "required",
+            "desc",
+            "isScan"
+          ]
+        },
+        {
+          "key": "img4",
+          "type": "img",
+          "label": "证明材料图一",
+          "required": false,
+          "keys": [
+            "name",
+            "type",
+            "key",
+            "required",
+            "desc",
+            "isScan"
+          ]
+        },
+        {
+          "key": "img5",
+          "type": "img",
+          "label": "证明材料图二",
+          "required": false,
+          "keys": [
+            "name",
+            "type",
+            "key",
+            "required",
+            "desc",
+            "isScan"
+          ]
+        },
+        {
+          "key": "img6",
+          "type": "img",
+          "label": "证明材料图三",
+          "required": false,
+          "keys": [
+            "name",
+            "type",
+            "key",
+            "required",
+            "desc",
+            "isScan"
+          ]
+        },
+        {
+          "key": "invoiceImgId",
+          "type": "img",
+          "label": "（必填）发票图片",
+          "required": true,
+          "keys": [
+            "name",
+            "type",
+            "key",
+            "required",
+            "desc",
+            "isScan"
+          ]
+        },
+        {
+          "key": "invoiceNum",
+          "type": "text",
+          "label": "请输入发票号码",
+          "required": true,
+          "keys": [
+            "name",
+            "type",
+            "key",
+            "ocrKey",
+            "required",
+            "desc",
+            "isScan"
+          ]
+        },
+        {
+          "key": "invoiceAmt",
+          "type": "text",
+          "label": "请输入发票金额",
+          "required": true,
+          "keys": [
+            "name",
+            "type",
+            "key",
+            "ocrKey",
+            "required",
+            "desc",
+            "isScan"
+          ]
+        },
+        {
+          "key": "invoiceHead",
+          "type": "text",
+          "label": "请输入购买方名称",
+          "required": true,
+          "keys": [
+            "name",
+            "type",
+            "key",
+            "ocrKey",
+            "required",
+            "desc",
+            "isScan"
+          ]
+        },
+        {
+          "key": "invoiceTime",
+          "type": "text",
+          "label": "例:20260101",
+          "required": true,
+          "keys": [
+            "name",
+            "type",
+            "key",
+            "ocrKey",
+            "required",
+            "desc",
+            "isScan"
+          ]
+        },
+        {
+          "key": "isRural",
+          "type": "select",
+          "label": "请选择收货地址是否农村地区",
+          "required": true,
+          "keys": [
+            "values",
+            "name",
+            "type",
+            "key",
+            "required",
+            "desc",
+            "isScan"
+          ]
+        },
+        {
+          "key": "selfPickup",
+          "type": "select",
+          "label": "请选择是否自提",
+          "required": true,
+          "keys": [
+            "values",
+            "name",
+            "type",
+            "key",
+            "required",
+            "desc",
+            "isScan"
+          ]
+        },
+        {
+          "key": "logisticsNum",
+          "type": "text",
+          "label": "线下销售非必填，线上销售必填",
+          "required": false,
+          "keys": [
+            "name",
+            "type",
+            "key",
+            "required",
+            "desc",
+            "isScan"
+          ]
+        },
+        {
+          "key": "deliverTime",
+          "type": "date",
+          "label": "自提请填交易时间，配送请填签收时间",
+          "required": true,
+          "keys": [
+            "name",
+            "type",
+            "key",
+            "required",
+            "desc",
+            "isScan"
+          ]
+        },
+        {
+          "key": "address",
+          "type": "text",
+          "label": "请选择所在省、市、区",
+          "required": true,
+          "keys": [
+            "name",
+            "type",
+            "key",
+            "required",
+            "desc",
+            "isScan"
+          ]
+        },
+        {
+          "key": "addressDetail",
+          "type": "text",
+          "label": "自提地址或配送地址",
+          "required": true,
+          "keys": [
+            "name",
+            "type",
+            "key",
+            "required",
+            "desc",
+            "isScan"
+          ]
+        },
+        {
+          "key": "addressCode",
+          "type": "unshow",
+          "label": "地区编码",
+          "required": true,
+          "keys": [
+            "name",
+            "type",
+            "key",
+            "required",
+            "desc",
+            "isScan"
+          ]
+        }
+      ],
+      "images": {
+        "img1": {
+          "label": "（必填）商品SN照片  ",
+          "present": 135,
+          "empty": 0,
+          "valueTypes": {
+            "string": 135
+          }
+        },
+        "img2": {
+          "label": "（必填）产品系统和包装盒SN码的二合一照",
+          "present": 135,
+          "empty": 0,
+          "valueTypes": {
+            "string": 135
+          }
+        },
+        "img3": {
+          "label": "系统IMEI码照片",
+          "present": 50,
+          "empty": 85,
+          "valueTypes": {
+            "string": 50,
+            "undefined": 79,
+            "object": 6
+          }
+        },
+        "img4": {
+          "label": "证明材料图一",
+          "present": 0,
+          "empty": 135,
+          "valueTypes": {
+            "undefined": 135
+          }
+        },
+        "img5": {
+          "label": "证明材料图二",
+          "present": 0,
+          "empty": 135,
+          "valueTypes": {
+            "undefined": 135
+          }
+        },
+        "img6": {
+          "label": "证明材料图三",
+          "present": 0,
+          "empty": 135,
+          "valueTypes": {
+            "undefined": 135
+          }
+        },
+        "invoiceImgId": {
+          "label": "（必填）发票图片",
+          "present": 135,
+          "empty": 0,
+          "valueTypes": {
+            "string": 135
+          }
+        }
+      }
+    },
+    "69554acafb9b8b7a4601a333": {
+      "orders": 605,
+      "fields": [
+        {
+          "key": "snCode",
+          "type": "text",
+          "label": "请输入或扫描序列号",
+          "required": true,
+          "keys": [
+            "name",
+            "type",
+            "key",
+            "required",
+            "desc",
+            "isScan"
+          ]
+        },
+        {
+          "key": "isAI",
+          "type": "select",
+          "label": "请选择是否属于AI产品",
+          "required": true,
+          "keys": [
+            "values",
+            "name",
+            "type",
+            "key",
+            "required",
+            "desc",
+            "isScan"
+          ]
+        },
+        {
+          "key": "imei1",
+          "type": "text",
+          "label": "请输入或扫描IMEI1",
+          "required": true,
+          "keys": [
+            "name",
+            "type",
+            "key",
+            "required",
+            "desc",
+            "isScan"
+          ]
+        },
+        {
+          "key": "imei2",
+          "type": "text",
+          "label": "请输入或扫描IMEI2，如无请置空",
+          "required": false,
+          "keys": [
+            "name",
+            "type",
+            "key",
+            "required",
+            "desc",
+            "isScan"
+          ]
+        },
+        {
+          "key": "isOldExchange",
+          "type": "select",
+          "label": "请选择是否交旧",
+          "required": true,
+          "keys": [
+            "values",
+            "name",
+            "type",
+            "key",
+            "required",
+            "desc",
+            "isScan"
+          ]
+        },
+        {
+          "key": "img1",
+          "type": "img",
+          "label": "（必填）手机系统SN码照",
+          "required": true,
+          "keys": [
+            "name",
+            "type",
+            "key",
+            "required",
+            "desc",
+            "isScan"
+          ]
+        },
+        {
+          "key": "img2",
+          "type": "img",
+          "label": "（必填）SN码和包装盒的二合一照",
+          "required": true,
+          "keys": [
+            "name",
+            "type",
+            "key",
+            "required",
+            "desc",
+            "isScan"
+          ]
+        },
+        {
+          "key": "img3",
+          "type": "img",
+          "label": "（必填）手机系统IMEI码照",
+          "required": true,
+          "keys": [
+            "name",
+            "type",
+            "key",
+            "required",
+            "desc",
+            "isScan"
+          ]
+        },
+        {
+          "key": "img4",
+          "type": "img",
+          "label": "证明材料图一",
+          "required": false,
+          "keys": [
+            "name",
+            "type",
+            "key",
+            "required",
+            "desc",
+            "isScan"
+          ]
+        },
+        {
+          "key": "img5",
+          "type": "img",
+          "label": "证明材料图二",
+          "required": false,
+          "keys": [
+            "name",
+            "type",
+            "key",
+            "required",
+            "desc",
+            "isScan"
+          ]
+        },
+        {
+          "key": "img6",
+          "type": "img",
+          "label": "证明材料图三",
+          "required": false,
+          "keys": [
+            "name",
+            "type",
+            "key",
+            "required",
+            "desc",
+            "isScan"
+          ]
+        },
+        {
+          "key": "invoiceImgId",
+          "type": "img",
+          "label": "（必填）发票图片",
+          "required": true,
+          "keys": [
+            "name",
+            "type",
+            "key",
+            "required",
+            "desc",
+            "isScan"
+          ]
+        },
+        {
+          "key": "invoiceNum",
+          "type": "text",
+          "label": "请输入发票号码",
+          "required": true,
+          "keys": [
+            "name",
+            "type",
+            "key",
+            "ocrKey",
+            "required",
+            "desc",
+            "isScan"
+          ]
+        },
+        {
+          "key": "invoiceAmt",
+          "type": "text",
+          "label": "请输入发票金额",
+          "required": true,
+          "keys": [
+            "name",
+            "type",
+            "key",
+            "ocrKey",
+            "required",
+            "desc",
+            "isScan"
+          ]
+        },
+        {
+          "key": "invoiceHead",
+          "type": "text",
+          "label": "请输入购买方名称",
+          "required": true,
+          "keys": [
+            "name",
+            "type",
+            "key",
+            "ocrKey",
+            "required",
+            "desc",
+            "isScan"
+          ]
+        },
+        {
+          "key": "invoiceTime",
+          "type": "text",
+          "label": "例:20260101",
+          "required": true,
+          "keys": [
+            "name",
+            "type",
+            "key",
+            "ocrKey",
+            "required",
+            "desc",
+            "isScan"
+          ]
+        },
+        {
+          "key": "isRural",
+          "type": "select",
+          "label": "请选择收货地址是否农村地区",
+          "required": true,
+          "keys": [
+            "values",
+            "name",
+            "type",
+            "key",
+            "required",
+            "desc",
+            "isScan"
+          ]
+        },
+        {
+          "key": "selfPickup",
+          "type": "select",
+          "label": "请选择是否自提",
+          "required": true,
+          "keys": [
+            "values",
+            "name",
+            "type",
+            "key",
+            "required",
+            "desc",
+            "isScan"
+          ]
+        },
+        {
+          "key": "logisticsNum",
+          "type": "text",
+          "label": "线下销售非必填，线上销售必填",
+          "required": false,
+          "keys": [
+            "name",
+            "type",
+            "key",
+            "required",
+            "desc",
+            "isScan"
+          ]
+        },
+        {
+          "key": "deliverTime",
+          "type": "date",
+          "label": "自提请填交易时间，配送请填签收时间",
+          "required": true,
+          "keys": [
+            "name",
+            "type",
+            "key",
+            "required",
+            "desc",
+            "isScan"
+          ]
+        },
+        {
+          "key": "address",
+          "type": "text",
+          "label": "请选择所在省、市、区",
+          "required": true,
+          "keys": [
+            "name",
+            "type",
+            "key",
+            "required",
+            "desc",
+            "isScan"
+          ]
+        },
+        {
+          "key": "addressDetail",
+          "type": "text",
+          "label": "自提地址或配送地址",
+          "required": true,
+          "keys": [
+            "name",
+            "type",
+            "key",
+            "required",
+            "desc",
+            "isScan"
+          ]
+        },
+        {
+          "key": "addressCode",
+          "type": "unshow",
+          "label": "地区编码",
+          "required": true,
+          "keys": [
+            "name",
+            "type",
+            "key",
+            "required",
+            "desc",
+            "isScan"
+          ]
+        }
+      ],
+      "images": {
+        "img1": {
+          "label": "（必填）手机系统SN码照",
+          "present": 605,
+          "empty": 0,
+          "valueTypes": {
+            "string": 605
+          }
+        },
+        "img2": {
+          "label": "（必填）SN码和包装盒的二合一照",
+          "present": 605,
+          "empty": 0,
+          "valueTypes": {
+            "string": 605
+          }
+        },
+        "img3": {
+          "label": "（必填）手机系统IMEI码照",
+          "present": 605,
+          "empty": 0,
+          "valueTypes": {
+            "string": 605
+          }
+        },
+        "img4": {
+          "label": "证明材料图一",
+          "present": 0,
+          "empty": 605,
+          "valueTypes": {
+            "undefined": 605
+          }
+        },
+        "img5": {
+          "label": "证明材料图二",
+          "present": 0,
+          "empty": 605,
+          "valueTypes": {
+            "undefined": 605
+          }
+        },
+        "img6": {
+          "label": "证明材料图三",
+          "present": 0,
+          "empty": 605,
+          "valueTypes": {
+            "undefined": 605
+          }
+        },
+        "invoiceImgId": {
+          "label": "（必填）发票图片",
+          "present": 605,
+          "empty": 0,
+          "valueTypes": {
+            "string": 605
+          }
+        }
+      }
+    }
+  }
+}

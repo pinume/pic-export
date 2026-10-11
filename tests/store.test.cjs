@@ -100,7 +100,7 @@ test("IndexedDB metadata migration failure preserves the old record and can retr
   restarted.commit = async () => { throw new Error("migration failed"); };
   await assert.rejects(restarted.getTask(), /migration failed/);
   assert.deepEqual(await h.store.read("tasks", "T1"), oldTask);
-  assert.deepEqual(h.value(), { id: "T1", storeVersion: 1 });
+  assert.deepEqual(h.value(), { id: "T1", storeVersion: 1, taskIds: { appliance: "T1" } });
   restarted.commit = commit;
   const migrated = await restarted.getTask();
   assert.deepEqual(migrated.currentRows, [oldTask.currentRow]);
@@ -146,4 +146,15 @@ test("version 1 database upgrade retains tasks, results, files and logs while ad
   assert.equal((await h.store.getTask()).listed, 1);
   assert.equal(await h.store.getPage("T1", 2), null);
   (await h.store.open()).close();
+});
+test('both business checkpoints survive worker restart without mixing records', async () => {
+  const h=fixture();
+  await h.store.save({...task(),id:'A',business:'appliance',status:'paused'},{rows:[{orderNo:'O',referenceNo:'R',result:'成功'}]});
+  await h.store.save({...task(),id:'D',business:'digital',status:'paused'},{rows:[{orderNo:'O',referenceNo:'R',result:'失败'}]});
+  const restarted=new TaskStore(h.storage,h.name);
+  assert.equal((await restarted.getBusinessTask('appliance')).id,'A');
+  assert.equal((await restarted.getBusinessTask('digital')).id,'D');
+  assert.equal((await restarted.rows('A'))[0].result,'成功');
+  assert.equal((await restarted.rows('D'))[0].result,'失败');
+  (await restarted.open()).close();
 });

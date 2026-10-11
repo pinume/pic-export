@@ -19,12 +19,12 @@ test("duplicate pair messages download one correctly named pair", async () => {
 });
 test("date range prefixes every new task download path", async () => {
   const h = harness(), { task } = await h.begin(["20260101", "20260131"]);
-  assert.equal(task.folderName, "20260101-20260131_" + task.id);
+  assert.equal(task.folderName, "家电电脑/20260101-20260131_" + task.id);
   await h.pair(task.id);
   await h.send({ type: "PIC_EXPERT_TASK_END", taskId: task.id, status: "completed" });
   await h.send({ type: "PIC_EXPERT_LOG_EXPORT" }, {});
   assert.ok(h.calls.length >= 4);
-  assert.ok(h.calls.every(call => call.filename.startsWith("pic-expert/20260101-20260131_" + task.id + "/")));
+  assert.ok(h.calls.every(call => call.filename.startsWith("pic-expert/家电电脑/20260101-20260131_" + task.id + "/")));
 });
 test("legacy task logs keep using the task ID folder", async () => {
   const initial = { id: "OLD", status: "completed", logs: [{ time: "2026-10-05", level: "info", stage: "test", message: "old" }] };

@@ -3,7 +3,23 @@ const { buildManifestCsv, makeTaskId, cleanText } = globalThis.PIC_EXPERT_CORE;
 const db = globalThis.PIC_EXPERT_STORE;
 const endings = new Map(), manifestExports = new Map();
 let stateQueue = Promise.resolve();
-const getTask = () => db.getTask();
+const getTask = id => db.getTask(id);
+const businessOf = message => {
+  const business = message.business || "appliance";
+  if (!["appliance", "digital"].includes(business)) throw new Error("导出功能无效。");
+  return business;
+};
+const selectedTask = message => db.getBusinessTask(businessOf(message));
+const assertIdle = async () => {
+  for (const business of ["appliance", "digital"]) {
+    const task = await db.getBusinessTask(business);
+    if (["running", "pausing", "stopping", "finalizing"].includes(task?.status)) throw new Error("已有任务运行；请先暂停或停止。");
+  }
+};
+const assertAccount = (task, accountId) => {
+  if (!/^[a-f0-9]{64}$/.test(accountId || "")) throw new Error("无法确认来源账号。");
+  if (task && (!task.accountId || task.accountId !== accountId)) throw new Error(task.accountId ? "来源账号与原任务不同，请登录原账号。" : "旧任务缺少可验证的账号归属，请保留原数据并开始新任务。");
+};
 const isTaskPage = sender => sender.url?.split("?")[0] === chrome.runtime.getURL("popup.html");
 const mutate = operation => {
   const promise = stateQueue.then(operation);
@@ -19,8 +35,9 @@ const appendLog = (changes, stage, message, level = "info") => {
     stage: String(stage || "任务").slice(0, 80), message: String(message || "").slice(0, 500) });
 };
 const update = (id, sender, operation, running = true) => mutate(async () => {
-  const task = await getTask();
+  const task = await getTask(id);
   assertTask(task, id, sender, running);
+  if ((await db.getBusinessTask(task.business || "appliance"))?.id !== id) throw new Error("任务已被新任务替换。");
   const changes = { rows: [], pairs: [], logs: [], pages: [] };
   await operation(task, changes);
   await db.save(task, changes);
@@ -37,7 +54,7 @@ const waitForDownload = async (id, timeoutMs = 120000, taskId = null) => {
   chrome.downloads.onChanged?.addListener(changed);
   try {
     while (Date.now() < deadline) {
-      if (taskId) assertTask(await getTask(), taskId, {}, true);
+      if (taskId) assertTask(await getTask(taskId), taskId, {}, true);
       const [item] = await chrome.downloads.search({ id });
       if (!item) throw new Error("下载记录丢失。");
       if (item.state === "complete") return item;
@@ -55,13 +72,14 @@ const orders = globalThis.PIC_EXPERT_ORDER_DOWNLOADS({
   db, downloads: chrome.downloads, getTask, update, assertTask, appendLog, waitForDownload
 });
 const startTask = message => mutate(async () => {
-  const existing = await getTask();
-  if (["running", "pausing", "stopping", "finalizing"].includes(existing?.status)) throw new Error("已有任务运行；页面中断时请先暂停或停止。");
+  const business = businessOf(message);
+  await assertIdle();
+  assertAccount(null, message.accountId);
   if (!Number.isInteger(message.tabId) || !Number.isInteger(message.frameId)) throw new Error("目标页面不完整。");
   const range = message.tradeDateRange;
   if (!Array.isArray(range) || range.length !== 2 || range.some(value => typeof value !== "string" || !/^\d{8}$/.test(value))) throw new Error("无法识别本次查询的交易日期区间。");
   const id = makeTaskId();
-  const task = { id, folderName: range[0] + "-" + range[1] + "_" + id, status: "running", tabId: message.tabId, frameId: message.frameId,
+  const task = { id, business, accountId: message.accountId, folderName: (business === "digital" ? "数码/" : "家电电脑/") + range[0] + "-" + range[1] + "_" + id, status: "running", tabId: message.tabId, frameId: message.frameId,
     startedAt: new Date().toISOString(), page: 1,
     scanned: 0, completed: 0, skipped: 0, failed: 0, currentRows: [], phase: "listing", listed: 0 };
   const changes = { logs: [] };
@@ -72,7 +90,7 @@ const startTask = message => mutate(async () => {
 const exportManifest = (taskId, sender, retry = false) => {
   if (manifestExports.has(taskId)) return manifestExports.get(taskId);
   const promise = (async () => {
-  let task = await getTask(); assertTask(task, taskId, sender, false);
+  let task = await getTask(taskId); assertTask(task, taskId, sender, false);
   if (task.manifestDownloadId !== undefined && !retry) {
     try { await waitForDownload(task.manifestDownloadId); return await update(taskId, sender, t => { t.manifestError = ""; }, false); }
     catch (error) { return update(taskId, sender, (t, c) => { t.manifestError = "清单下载失败：" + error.message; appendLog(c, "下载清单", t.manifestError, "error"); }, false); }
@@ -114,25 +132,27 @@ const finalizeTask = (message, sender) => {
   endings.set(taskId, promise);
   return promise;
 };
-const pauseTask = async sender => {
-  const task = await getTask();
+const pauseTask = async (message, sender) => {
+  const task = await selectedTask(message);
   if (!task || !["running", "pausing"].includes(task.status)) return task;
   const force = task.status === "pausing";
   await update(task.id, sender, (t, c) => { t.status = "pausing"; t.forcePause = force; appendLog(c, "暂停任务", force ? "中断当前等待并保存断点" : "等待在途订单结束"); }, false);
-  const response = await chrome.tabs.sendMessage(task.tabId, { type: "PIC_EXPERT_PAUSE", force }, { frameId: task.frameId }).catch(() => null);
+  const response = await chrome.tabs.sendMessage(task.tabId, { type: "PIC_EXPERT_PAUSE", taskId: task.id, force }, { frameId: task.frameId }).catch(() => null);
   if (!response?.running) {
     await update(task.id, sender, t => { t.forcePause = true; }, false);
     await orders.reconcile(task.id, sender);
     return update(task.id, sender, t => { if (t.status === "pausing") t.status = "paused"; delete t.forcePause; }, false);
   }
   if (force) await orders.reconcile(task.id, sender);
-  return getTask();
+  return getTask(task.id);
 };
 const resumeTask = (message, sender) => mutate(async () => {
   if (sender.tab && !isTaskPage(sender)) throw new Error("请从独立任务页面继续任务。");
-  const task = await getTask();
+  const task = await selectedTask(message);
   if (!task || !(["paused", "failed"].includes(task.status) || task.status === "completed" && task.failed > 0) || !task.checkpoint) throw new Error("没有可继续的断点，请先完成原查询。");
   if (!Number.isInteger(message.tabId) || !Number.isInteger(message.frameId)) throw new Error("目标页面不完整。");
+  await assertIdle();
+  assertAccount(task, message.accountId);
   task.tabId = message.tabId; task.frameId = message.frameId; task.status = "running"; task.error = "";
   task.generation = (task.generation || 0) + 1;
   delete task.forcePause; task.manifestError = "";
@@ -150,16 +170,17 @@ const autoPauseTask = async (taskId, sender, error, generation) => {
     appendLog(c, "自动暂停", error, "error");
   }, false);
   if (!pausing) return task;
-  await chrome.tabs.sendMessage(task.tabId, { type: "PIC_EXPERT_PAUSE", force: true }, { frameId: task.frameId }).catch(() => {});
+  await chrome.tabs.sendMessage(task.tabId, { type: "PIC_EXPERT_PAUSE", taskId: task.id, force: true }, { frameId: task.frameId }).catch(() => {});
   await orders.reconcile(taskId, sender);
   return update(taskId, sender, t => {
     if (t.status === "pausing" && (t.generation || 0) === (task.generation || 0)) { t.status = "paused"; delete t.forcePause; }
   }, false);
 };
 const sourceInterrupted = async (tabId, reason) => {
-  const task = await getTask();
-  if (task?.tabId !== tabId || !["running", "pausing"].includes(task.status)) return;
-  await autoPauseTask(task.id, {}, reason, task.generation || 0);
+  for (const business of ["appliance", "digital"]) {
+    const task = await db.getBusinessTask(business);
+    if (task?.tabId === tabId && ["running", "pausing"].includes(task.status)) await autoPauseTask(task.id, {}, reason, task.generation || 0);
+  }
 };
 chrome.tabs.onUpdated.addListener((tabId, change) => {
   if (change.status === "loading") sourceInterrupted(tabId, "来源网页已刷新或跳转，任务已中断。请等待暂停完成，恢复原日期和状态查询后继续。").catch(error => console.error("中断暂停失败：", error));
@@ -172,9 +193,9 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     switch (message?.type) {
       case "PIC_EXPERT_TASK_BEGIN": return { ok: true, task: await startTask(message) };
       case "PIC_EXPERT_TASK_RESUME": return { ok: true, task: await resumeTask(message, sender) };
-      case "PIC_EXPERT_TASK_PAUSE": return { ok: true, task: await summary(await pauseTask(sender)) };
+      case "PIC_EXPERT_TASK_PAUSE": return { ok: true, task: await summary(await pauseTask(message, sender)) };
       case "PIC_EXPERT_TASK_PAUSED": {
-        const task = await getTask(); assertTask(task, message.taskId, sender, false);
+        const task = await getTask(message.taskId); assertTask(task, message.taskId, sender, false);
         if (!["pausing", "paused"].includes(task.status)) return { ok: true };
         await orders.reconcile(task.id, sender);
         return { ok: true, task: await update(task.id, sender, t => { if (t.status === "pausing") t.status = "paused"; delete t.forcePause; if (message.error) t.error = message.error; }, false) };
@@ -209,7 +230,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
           appendLog(c, "列表完成", "已读取全部 " + t.total + " 笔订单，开始处理资料");
         }) };
       case "PIC_EXPERT_LIST_GET": {
-        assertTask(await getTask(), message.taskId, sender);
+        assertTask(await getTask(message.taskId), message.taskId, sender);
         return { ok: true, page: await db.getPage(message.taskId, message.page) };
       }
       case "PIC_EXPERT_CHECKPOINT":
@@ -239,15 +260,18 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       case "PIC_EXPERT_TASK_HALT":
         return { ok: true, task: await update(message.taskId, sender, t => { t.status = "stopping"; t.error = message.error || "任务中断。"; }) };
       case "PIC_EXPERT_TASK_STOP": {
-        const task = await getTask();
+        const task = await selectedTask(message);
         if (!task || !["running", "pausing", "paused", "stopping", "finalizing"].includes(task.status)) return { ok: true, task: await summary(task) };
-        await update(task.id, sender, t => { t.status = "stopping"; t.finalStatus = "failed"; t.error = "用户停止任务。"; }, false);
-        const response = await chrome.tabs.sendMessage(task.tabId, { type: "PIC_EXPERT_STOP" }, { frameId: task.frameId }).catch(() => null);
-        if (response?.running) return { ok: true, task: await summary(await getTask()) };
+        await update(task.id, sender, async t => {
+          if (t.status === "paused") await assertIdle();
+          t.status = "stopping"; t.finalStatus = "failed"; t.error = "用户停止任务。";
+        }, false);
+        const response = await chrome.tabs.sendMessage(task.tabId, { type: "PIC_EXPERT_STOP", taskId: task.id }, { frameId: task.frameId }).catch(() => null);
+        if (response?.running) return { ok: true, task: await summary(await selectedTask(message)) };
         return { ok: true, task: await summary(await finalizeTask({ taskId: task.id, status: "failed", error: "用户停止任务。" }, sender)) };
       }
       case "PIC_EXPERT_MANIFEST_RETRY": {
-        const task = await getTask();
+        const task = await selectedTask(message);
         if (!task || !["completed", "failed"].includes(task.status)) throw new Error("请等待任务结束。");
         if (task.manifestDownloadId !== undefined) {
           const [item] = await chrome.downloads.search({ id: task.manifestDownloadId });
@@ -256,7 +280,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         return { ok: true, task: await summary(await exportManifest(task.id, sender, true)) };
       }
       case "PIC_EXPERT_LOG_EXPORT": {
-        const task = await getTask(); if (!task) throw new Error("没有运行日志。");
+        const task = await selectedTask(message); if (!task) throw new Error("没有运行日志。");
         let after = 0, part = 1, page;
         do {
           page = await db.logPage(task.id, after);
@@ -268,7 +292,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         } while (page.more);
         return { ok: true };
       }
-      case "PIC_EXPERT_TASK_STATE": return { ok: true, task: await summary(await getTask()) };
+      case "PIC_EXPERT_TASK_STATE": return { ok: true, task: await summary(await selectedTask(message)) };
       default: return { ok: false, error: "unknown_message" };
     }
   })().then(sendResponse).catch(error => sendResponse({ ok: false, error: error.message, files: error.files }));

@@ -65,24 +65,27 @@
     return { url: urlData, extension: format.extension };
   };
   const identity = row => ({ orderNo: FILES.cleanText(row.merOrderId), referenceNo: FILES.cleanText(row.transRef) });
-  const processRow = async (row, client, taskId, ensureActive, note) => {
+  const processRow = async (row, client, taskId, ensureActive, note, business) => {
     const id = identity(row);
     if (!id.orderNo || !id.referenceNo) return { ...id, result: "失败", reason: "订单号或参考号缺失" };
     const reason = message => [note, message].filter(Boolean).join("；");
     try {
       await log("读取详情", "订单 " + id.orderNo + "，参考号 " + id.referenceNo);
-      const states = await client.assets(row, location.origin);
+      const states = await client.assets(row, location.origin, business);
       ensureActive();
-      if (FILES.REQUIRED_KINDS.some(kind => !states[kind]?.length)) {
+      if (business === "digital" && states.missing.length) {
+        return { ...id, result: "跳过", reason: reason("必填图片缺失：" + states.missing.join("、")) };
+      }
+      if (business !== "digital" && FILES.REQUIRED_KINDS.some(kind => !states[kind]?.length)) {
         return { ...id, result: "跳过", reason: reason("SN码或发票图片缺失") };
       }
-      for (const kind of FILES.PROOF_KINDS) {
+      for (const kind of business === "digital" ? [] : FILES.PROOF_KINDS) {
         if (states[kind].length > 1) throw new Error(kind + "图片不唯一，已停止该订单下载。");
       }
-      const assets = Object.fromEntries(FILES.ASSET_KINDS.flatMap(kind => states[kind].map((url, i, urls) =>
+      const assets = business === "digital" ? states.files : Object.fromEntries(FILES.ASSET_KINDS.flatMap(kind => states[kind].map((url, i, urls) =>
         [urls.length > 1 ? kind + "-" + (i + 1) : kind, url])));
       const kinds = Object.keys(assets);
-      const prepared = {};
+      const prepared = Object.create(null);
       let cursor = 0;
       const readers = Array.from({ length: Math.min(2, kinds.length) }, async () => {
         while (cursor < kinds.length) {
@@ -100,7 +103,7 @@
       const failure = results.find(result => result.status === "rejected" && result.reason.auth) ||
         results.find(result => result.status === "rejected");
       if (failure) throw failure.reason;
-      for (const kind of FILES.PROOF_KINDS) if (!assets[kind]) await log("证明材料", kind + "为空，跳过");
+      for (const kind of business === "digital" ? [] : FILES.PROOF_KINDS) if (!assets[kind]) await log("证明材料", kind + "为空，跳过");
       ensureActive();
       await checkedSend({ type: "PIC_EXPERT_DOWNLOAD_PAIR", taskId, ...id, assets: prepared, note });
       return { ...id, result: "成功", reason: note };
@@ -118,7 +121,7 @@
     if (result.rows.some(row => !identity(row).orderNo || !identity(row).referenceNo)) throw new Error("订单列表缺少订单号或参考号，已停止。");
     return result;
   };
-  const run = async (taskId, checkpoint = null) => {
+  const run = async (taskId, checkpoint = null, task = { business: "appliance" }) => {
     running = true; pauseRequested = false; forcePauseRequested = false; stopped = false; activeTaskId = taskId;
     requestController = new AbortController();
     const seen = new Set();
@@ -133,12 +136,20 @@
     };
     try {
       const initialContext = pageContext();
+      const initialAccount = SITE.accountName(document);
+      const initialToken = globalThis.localStorage?.getItem("userPortalVerifyToken");
+      if (task.accountId && await SITE.account(document) !== task.accountId) {
+        const error = new Error("来源账号与原任务不同，请登录原账号。"); error.auth = true; throw error;
+      }
       let listSize = checkpoint ? checkpoint.size || initialContext.size : initialContext.listSize || initialContext.size;
       const readAll = Boolean(initialContext.listSize) && listSize >= initialContext.listSize;
       let context = { ...initialContext, size: listSize };
       const initialQuery = JSON.stringify(initialContext.filters);
       const initialVisiblePage = JSON.stringify(initialContext.visiblePage);
       const ensureContextUnchanged = () => {
+        if (SITE.accountName(document) !== initialAccount || globalThis.localStorage?.getItem("userPortalVerifyToken") !== initialToken) {
+          const error = new Error("来源账号或登录状态已变化，请恢复原账号后继续。"); error.auth = true; throw error;
+        }
         const current = pageContext();
         if (JSON.stringify(current.filters) !== initialQuery || current.url !== initialContext.url ||
           current.size !== initialContext.size || JSON.stringify(current.visiblePage) !== initialVisiblePage) {
@@ -235,7 +246,7 @@
               ensureActive();
               const note = CORE.isMaterialModification([row.statusDesc, row.statusText].join(" ")) ? "材料修改" : "";
               await checkedSend({ type: "PIC_EXPERT_ROW_BEGIN", taskId, identity: id, note });
-              const outcome = await processRow(row, client, taskId, ensureActive, note);
+              const outcome = await processRow(row, client, taskId, ensureActive, note, task.business);
               ensureActive();
               await checkedSend({ type: "PIC_EXPERT_MANIFEST_ROW", taskId, row: outcome });
             } catch (error) {
@@ -278,13 +289,18 @@
           tradeDateRange = [filters.beginTransDate, filters.endTransDate];
         } catch {}
       }
-      sendResponse({ ok: true, ready, running, tradeDateRange }); return false;
+      if (!ready) { sendResponse({ ok: true, ready, running, tradeDateRange }); return false; }
+      SITE.account(document).then(accountId => sendResponse({ ok: true, ready, running, tradeDateRange, accountId }))
+        .catch(error => sendResponse({ ok: false, error: error.message }));
+      return true;
     }
     if (message?.type === "PIC_EXPERT_STOP") {
+      if (message.taskId && message.taskId !== activeTaskId) { sendResponse({ ok: true, running: false }); return false; }
       stopped = true; requestController?.abort(new Error("用户停止任务。"));
       sendResponse({ ok: true, running }); return false;
     }
     if (message?.type === "PIC_EXPERT_PAUSE") {
+      if (message.taskId && message.taskId !== activeTaskId) { sendResponse({ ok: true, running: false }); return false; }
       pauseRequested = true;
       if (message.force) {
         forcePauseRequested = true;
@@ -296,7 +312,7 @@
     if (running) { sendResponse({ ok: false, error: "当前页面已有任务。" }); return false; }
     running = true; stopped = false; pauseRequested = false;
     sendResponse({ ok: true });
-    void run(message.taskId, message.checkpoint || null);
+    void run(message.taskId, message.checkpoint || null, message.task);
     return false;
   });
   if (typeof module !== "undefined" && module.exports) module.exports = { run };

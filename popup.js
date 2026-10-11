@@ -13,6 +13,9 @@ const logsElement = document.querySelector("#logs");
 const copyLogsButton = document.querySelector("#copy-logs");
 const copyStatusElement = document.querySelector("#copy-status");
 let exportingLogs = false;
+const businessSelect = document.querySelector("#business");
+businessSelect.value = new URLSearchParams(location.search).get("business") === "digital" ? "digital" : "appliance";
+let business = businessSelect.value;
 const preferredTabId = Number(new URLSearchParams(location.search).get("tabId")) || null;
 const sourceTab = async resume => {
   const tabs = await chrome.tabs.query({ url: "https://service.chinaums.com/*" });
@@ -25,7 +28,7 @@ const sourceTab = async resume => {
   throw new Error("打开了多个银联商务页面，无法确定订单来源。请只保留一个订单网站标签页后重试。");
 };
 const request = async message => {
-  const response = await chrome.runtime.sendMessage(message);
+  const response = await chrome.runtime.sendMessage({ ...message, business });
   if (!response?.ok) throw new Error(response?.error || "后台无响应。");
   return response;
 };
@@ -64,10 +67,12 @@ const renderTask = task => {
   copyLogsButton.disabled = !logText;
 };
 const refresh = async () => {
-  try { renderTask((await request({ type: "PIC_EXPERT_TASK_STATE" })).task); }
+  const selected = business;
+  try { const response = await request({ type: "PIC_EXPERT_TASK_STATE" }); if (selected === business) renderTask(response.task); }
   catch (error) { errorElement.textContent = error.message; }
 };
 const launch = async resume => {
+  businessSelect.disabled = true;
   startButton.disabled = true;
   errorElement.textContent = "";
   let task;
@@ -84,8 +89,9 @@ const launch = async resume => {
     const probe = probes.find(item => item.frameId === frameId)?.result;
     if (probe?.running) throw new Error("页面上一笔任务仍在退出，请稍候，或手动刷新并恢复原查询后继续。");
     task = (await request({ type: resume ? "PIC_EXPERT_TASK_RESUME" : "PIC_EXPERT_TASK_BEGIN", tabId: tab.id, frameId,
+      accountId: probe.accountId,
       ...(resume ? {} : { tradeDateRange: probe?.tradeDateRange }) })).task;
-    const response = await chrome.tabs.sendMessage(tab.id, { type: "PIC_EXPERT_START", taskId: task.id, checkpoint: resume ? task.checkpoint : null }, { frameId });
+    const response = await chrome.tabs.sendMessage(tab.id, { type: "PIC_EXPERT_START", taskId: task.id, task: { business, accountId: task.accountId }, checkpoint: resume ? task.checkpoint : null }, { frameId });
     if (!response?.ok) throw new Error(response?.error || "页面任务启动失败。");
     renderTask(task);
   } catch (error) {
@@ -94,6 +100,7 @@ const launch = async resume => {
     errorElement.textContent = error.message;
     startButton.disabled = false;
   }
+  finally { businessSelect.disabled = false; }
 };
 startButton.addEventListener("click", () => launch(false));
 resumeButton.addEventListener("click", async () => {
@@ -134,6 +141,12 @@ copyLogsButton.addEventListener("click", async () => {
     logsElement.select();
     copyStatusElement.textContent = document.execCommand("copy") ? "已复制" : "请手动复制已选中的日志";
   }
+});
+businessSelect.addEventListener("change", () => {
+  business = businessSelect.value;
+  const url = new URL(location.href); url.searchParams.set("business", business);
+  history.replaceState(null, "", url.href);
+  refresh();
 });
 refresh();
 const pollTimer = setInterval(refresh, 1000);

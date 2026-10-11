@@ -7,20 +7,24 @@ chrome.runtime.sendMessage({ type: "PIC_EXPERT_TASK_STATE" }).then(response => {
   document.querySelector("#entry-status").textContent = task ? labels[task.status] || task.status : "未开始";
   document.querySelector("#entry-progress").textContent = task ? "成功 " + task.completed + " · 跳过 " + task.skipped + " · 失败 " + task.failed : "SN码、发票及证明材料下载";
 }).catch(error => { entryError.textContent = error.message; });
-openTaskButton.addEventListener("click", async () => {
-  openTaskButton.disabled = true;
+const openTask = async (business, button) => {
+  button.disabled = true;
   try {
     const pageUrl = chrome.runtime.getURL("popup.html");
-    const pages = await chrome.tabs.query({ url: pageUrl + "*" });
+    const pages = (await chrome.tabs.query({ url: pageUrl + "*" })).filter(tab => (new URL(tab.url).searchParams.get("business") || "appliance") === business);
     if (pages.length) {
       await chrome.tabs.update(pages[0].id, { active: true });
       await chrome.windows.update(pages[0].windowId, { focused: true });
     } else {
       const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
       const url = new URL(pageUrl);
+      url.searchParams.set("business", business);
       if (tab?.url?.startsWith("https://service.chinaums.com/")) url.searchParams.set("tabId", String(tab.id));
       await chrome.tabs.create({ url: url.href });
     }
     window.close();
-  } catch (error) { entryError.textContent = error.message; openTaskButton.disabled = false; }
-});
+  } catch (error) { entryError.textContent = error.message; button.disabled = false; }
+};
+openTaskButton.addEventListener("click", () => openTask("appliance", openTaskButton));
+const digitalButton = document.querySelector("#open-digital");
+digitalButton.addEventListener("click", () => openTask("digital", digitalButton));

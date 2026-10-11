@@ -1,0 +1,21 @@
+{
+  "outcome": "passed",
+  "browser": "Chrome/155.0.8059.40",
+  "root": "/private/tmp/pic-digital-e2e-a6KIm8",
+  "checks": [
+    "two actual entry buttons",
+    "digital template filenames and bytes",
+    "optional IMEI and proof",
+    "missing required invoice skip",
+    "pause and page reload",
+    "wrong account rejected",
+    "separate business tasks",
+    "appliance rules",
+    "same-account new token resume",
+    "no duplicate completed images",
+    "missing-file recovery"
+  ],
+  "digitalImages": 11,
+  "applianceImages": 6,
+  "fixtureAdaptation": "localhost permission and source-tab URL pattern only"
+}

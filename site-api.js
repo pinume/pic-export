@@ -10,6 +10,17 @@
     ["已退回/审核未通过", ["S03"]], ["已退回/审核已终止", ["S04"]]
   ]);
   const { cleanText } = globalThis.PIC_EXPERT_CORE;
+  const accountName = doc => {
+    try {
+      const nodes = doc.defaultView.top.document.querySelectorAll(".userInfo .loginName");
+      if (nodes.length === 1 && cleanText(nodes[0].textContent)) return cleanText(nodes[0].textContent);
+    } catch {}
+    const error = new Error("无法确认来源账号，请在商户平台重新登录并恢复查询。"); error.auth = true; throw error;
+  };
+  const account = async doc => {
+    const bytes = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(accountName(doc)));
+    return Array.from(new Uint8Array(bytes), value => value.toString(16).padStart(2, "0")).join("");
+  };
   const parseJson = value => typeof value === "string" ? JSON.parse(value) : value;
   const parseRange = (value, name) => {
     if (!value) throw new Error(name + "不能为空。");
@@ -138,7 +149,7 @@
         if (!Array.isArray(data?.list) || !Number.isInteger(Number(data.total))) throw new Error("订单列表接口响应不完整。");
         return { rows: data.list, total: Number(data.total) };
       },
-      async assets(row, origin) {
+      async assets(row, origin, business = "appliance") {
         if (!row?.mchntId || !row?.id) throw new Error("订单详情身份字段缺失。");
         const detail = await request("portal/yjhx/v3/queryDtl", { mchntId: row.mchntId, uuid: row.id }, token, fetcher);
         if (!detail?.templateId) throw new Error("订单详情接口未返回模板编号。");
@@ -146,6 +157,26 @@
         const product = parseJson(detail.productJson);
         const groups = parseJson(templateData?.productJson);
         if (!product || typeof product !== "object" || !Array.isArray(groups)) throw new Error("订单图片字段无法识别。");
+        if (business === "digital") {
+          if (Array.isArray(product) || groups.some(group => !Array.isArray(group?.its) || group.its.some(item => !item || typeof item.type !== "string"))) throw new Error("数码图片模板分组无法安全识别。");
+          const fields = groups.flatMap(group => Array.isArray(group?.its) ? group.its : []).filter(item => item?.type === "img");
+          if (!fields.length || fields.some(item => !item.key || typeof item.required !== "boolean")) throw new Error("数码图片模板无法安全识别。");
+          const keys = new Set(), used = new Set(), files = Object.create(null), missing = [];
+          const names = fields.map(item => globalThis.PIC_EXPERT_CORE.sanitizePathPart(cleanText(item.desc || item.name).replace(/^[（(](?:必填|选填)[）)]\s*/, ""), ""));
+          for (const [index, item] of fields.entries()) {
+            if (keys.has(item.key) || !names[index]) throw new Error("数码图片字段身份或名称不唯一。");
+            keys.add(item.key);
+            const value = product[item.key];
+            if (value != null && typeof value !== "string") throw new Error("数码图片字段格式无法识别。");
+            let name = names[index];
+            if (names.filter(n => n === name).length > 1) name = name.slice(0, 110) + "-" + (names.slice(0, index + 1).filter(n => n === names[index]).length);
+            if (used.has(name)) throw new Error("数码图片文件名冲突。");
+            used.add(name);
+            if (!cleanText(value)) { if (item.required) missing.push(name); continue; }
+            files[name] = imageUrl(cleanText(value), origin, token);
+          }
+          return { files, missing };
+        }
         const found = {};
         for (const item of groups.flatMap(group => Array.isArray(group?.its) ? group.its : [])) {
           if (item?.type !== "img") continue;
@@ -169,6 +200,6 @@
     url.searchParams.set("userPortalToken", token);
     return url.href;
   };
-  globalThis.PIC_EXPERT_SITE_API = Object.freeze({ context, isReady, signature, makeClient, imageUrl });
+  globalThis.PIC_EXPERT_SITE_API = Object.freeze({ context, isReady, signature, makeClient, imageUrl, account, accountName });
   if (typeof module !== "undefined" && module.exports) module.exports = globalThis.PIC_EXPERT_SITE_API;
 })();

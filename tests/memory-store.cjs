@@ -5,15 +5,17 @@ class MemoryStore {
       const {manifestRows = [],downloads = {},logs = [],...task} = structuredClone(initial);
       task.scanned = manifestRows.length;
       for (const [key,result] of [["completed","成功"],["skipped","跳过"],["failed","失败"]]) task[key] = manifestRows.filter(r => r.result === result).length;
-      this.activeId = task.id; this.tasks.set(task.id,task);
+      this.activeId = task.id; this.taskIds = { appliance: task.id }; this.tasks.set(task.id,task);
       this.rowMap.set(task.id,new Map(manifestRows.map(r => [JSON.stringify([r.orderNo,r.referenceNo]),r])));
       this.pairMap.set(task.id,new Map(Object.entries(downloads).map(([referenceNo,pair]) => [referenceNo,{referenceNo,...pair}])));
       this.logMap.set(task.id,logs);
     }
   }
-  async getTask() { return structuredClone(this.tasks.get(this.activeId) || null); }
+  async getTask(id) { return structuredClone(this.tasks.get(id || this.activeId) || null); }
+  async getBusinessTask(business) { return structuredClone(this.tasks.get(this.taskIds?.[business]) || null); }
   async save(task, changes = {}) {
     this.activeId = task.id; this.tasks.set(task.id,structuredClone(task));
+    this.taskIds = { ...this.taskIds, [task.business || "appliance"]: task.id };
     this.rowMap.set(task.id,this.rowMap.get(task.id) || new Map());
     this.pairMap.set(task.id,this.pairMap.get(task.id) || new Map());
     this.logMap.set(task.id,this.logMap.get(task.id) || []);

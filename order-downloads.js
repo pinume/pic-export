@@ -12,11 +12,15 @@ globalThis.PIC_EXPERT_ORDER_DOWNLOADS = ({ db, downloads, getTask, update, asser
     row.page ??= task.currentRows?.find(item => item.orderNo === row.orderNo && item.referenceNo === row.referenceNo)?.page || task.page;
     task.currentRows = (task.currentRows || []).filter(item => item.orderNo !== row.orderNo || item.referenceNo !== row.referenceNo);
   };
-  const validateAssets = assets => {
+  const validateAssets = (assets, business) => {
     const formats = { ".jpg": "image/jpeg", ".png": "image/png", ".webp": "image/webp", ".gif": "image/gif", ".bmp": "image/bmp" };
-    const kinds = assetNames(assets);
-    if (!assets || REQUIRED_KINDS.some(kind => !kinds.some(name => fileKind(name) === kind))) throw new Error("必须提供 SN码和发票图片。");
-    if (kinds.some(kind => !fileKind(kind))) throw new Error("图片类型不受支持。");
+    const kinds = business === "digital" ? Object.keys(assets || {}) : assetNames(assets);
+    if (business === "digital") {
+      if (!kinds.length || kinds.some(name => sanitizePathPart(name) !== name || name === "." || name === "..")) throw new Error("数码图片文件名无效。");
+    } else {
+      if (!assets || REQUIRED_KINDS.some(kind => !kinds.some(name => fileKind(name) === kind))) throw new Error("必须提供 SN码和发票图片。");
+      if (kinds.some(kind => !fileKind(kind))) throw new Error("图片类型不受支持。");
+    }
     for (const kind of kinds) {
       const asset = assets[kind];
       if (!asset || !formats[asset.extension] || !asset.url?.startsWith("data:" + formats[asset.extension] + ";base64,")) throw new Error(kind + "图片格式未验证。");
@@ -25,7 +29,7 @@ globalThis.PIC_EXPERT_ORDER_DOWNLOADS = ({ db, downloads, getTask, update, asser
   };
   const rollback = async (taskId, referenceNo, sender, reason) => {
     const pair = await db.getPair(taskId, referenceNo);
-    const leftovers = {};
+    const leftovers = Object.create(null);
     for (const [kind, file] of Object.entries(pair.files)) {
       try {
         await downloads.cancel(file.downloadId).catch(() => {});
@@ -49,7 +53,9 @@ globalThis.PIC_EXPERT_ORDER_DOWNLOADS = ({ db, downloads, getTask, update, asser
   };
   const downloadPair = async (message, sender) => {
     const { taskId, orderNo, referenceNo, assets } = message;
-    const kinds = validateAssets(assets);
+    const task = await getTask(taskId);
+    assertTask(task, taskId, sender);
+    const kinds = validateAssets(assets, task.business);
     if (!orderNo || !/^[A-Za-z0-9_-]+$/.test(referenceNo || "")) throw new Error("订单身份不完整。");
     const key = taskId + "::" + referenceNo;
     await update(taskId, sender, async (_task, changes) => {
@@ -60,11 +66,11 @@ globalThis.PIC_EXPERT_ORDER_DOWNLOADS = ({ db, downloads, getTask, update, asser
     });
     if (pairs.has(key)) return pairs.get(key);
     const promise = (async () => {
-      assertTask(await getTask(), taskId, sender);
+      assertTask(await getTask(taskId), taskId, sender);
       let previous = await db.getPair(taskId, referenceNo);
       if (previous.status === "complete") return previous.files;
       if (previous.status === "failed") {
-        const task = await getTask();
+        const task = await getTask(taskId);
         if ((previous.generation || 0) !== (task.generation || 0) && Object.keys(previous.files).length) {
           await rollback(taskId, referenceNo, sender, "继续前重新清理残留文件。");
           previous = await db.getPair(taskId, referenceNo);
@@ -76,14 +82,14 @@ globalThis.PIC_EXPERT_ORDER_DOWNLOADS = ({ db, downloads, getTask, update, asser
       }
       try {
         for (const kind of kinds) {
-          const task = await getTask();
+          const task = await getTask(taskId);
           assertTask(task, taskId, sender);
           const pair = await db.getPair(taskId, referenceNo);
-          const existing = pair.files[kind];
+          const existing = Object.hasOwn(pair.files, kind) ? pair.files[kind] : null;
           const filename = existing?.filename || "pic-expert/" + (task.folderName || task.id) + "/" + sanitizePathPart(referenceNo) + "/" + kind + assets[kind].extension;
           const downloadId = existing?.downloadId ?? await downloads.download({ url: assets[kind].url, filename, saveAs: false, conflictAction: "overwrite" });
           await update(taskId, sender, (_task, changes) => {
-            pair.files[kind] = { downloadId, filename };
+            pair.files = { ...pair.files, [kind]: { downloadId, filename } };
             changes.pairs.push(pair);
             appendLog(changes, "下载图片", kind + "，编号 " + downloadId + "，路径 " + filename);
           }, false);
@@ -131,7 +137,7 @@ globalThis.PIC_EXPERT_ORDER_DOWNLOADS = ({ db, downloads, getTask, update, asser
     return promise;
   };
   const rowStatus = async (message, sender) => {
-    const task = await getTask();
+    const task = await getTask(message.taskId);
     assertTask(task, message.taskId, sender);
     const row = await db.getRow(message.taskId, message.identity);
     if (row?.page && row.page !== task.page) throw new Error("同一订单出现在不同页，查询结果已变化。");
