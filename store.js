@@ -110,6 +110,33 @@
         this.activeId = task.id;
       }
     }
+    // Only the latest task of each business is ever read; all other task records are deleted.
+    async prune() {
+      await this.ready();
+      const keep = new Set(Object.values(this.taskIds || {}));
+      if (!keep.size) return;
+      const db = await this.open();
+      const names = ["tasks", "rows", "pairs", "logs", "pages"];
+      return new Promise((resolve, reject) => {
+        const tx = db.transaction(names, "readwrite");
+        tx.oncomplete = resolve;
+        tx.onabort = () => reject(tx.error || new Error("旧任务清理失败。"));
+        const ids = tx.objectStore("tasks").getAllKeys();
+        ids.onsuccess = () => {
+          for (const id of ids.result.filter(id => !keep.has(id))) {
+            tx.objectStore("tasks").delete(id);
+            for (const name of names.slice(1)) {
+              const cursor = tx.objectStore(name).index("taskId").openKeyCursor(IDBKeyRange.only(id));
+              cursor.onsuccess = () => {
+                if (!cursor.result) return;
+                tx.objectStore(name).delete(cursor.result.primaryKey);
+                cursor.result.continue();
+              };
+            }
+          }
+        };
+      });
+    }
     async getBusinessTask(business) {
       await this.ready();
       const id = this.taskIds?.[business];

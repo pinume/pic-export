@@ -26,6 +26,10 @@ class MemoryStore {
     this.logMap.get(task.id).push(...structuredClone(changes.logs || []));
     this.writes.push({metadataBytes:JSON.stringify(task).length,rows:changes.rows?.length || 0,pairs:changes.pairs?.length || 0});
   }
+  async prune() {
+    const keep = new Set(Object.values(this.taskIds || {}));
+    for (const map of [this.tasks,this.rowMap,this.pairMap,this.logMap,this.pageMap]) for (const id of [...map.keys()]) if (!keep.has(id)) map.delete(id);
+  }
   async getRow(id,row) { return structuredClone(this.rowMap.get(id)?.get(JSON.stringify([row.orderNo,row.referenceNo])) || null); }
   async getPair(id,ref) { return structuredClone(this.pairMap.get(id)?.get(ref) || null); }
   async getPage(id,page) { return structuredClone(this.pageMap.get(id)?.get(page) || null); }

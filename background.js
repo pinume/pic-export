@@ -80,6 +80,8 @@ const startTask = message => mutate(async () => {
   const changes = { logs: [] };
   appendLog(changes, "创建任务", "任务 " + task.id + "，frame " + task.frameId);
   await db.save(task, changes);
+  // Cleanup must not fail the new task; whatever is left is removed when the next task starts.
+  await db.prune().catch(error => console.error("旧任务清理失败：", error));
   return task;
 });
 const exportManifest = (taskId, sender, retry = false) => {

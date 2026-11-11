@@ -158,3 +158,24 @@ test('both business checkpoints survive worker restart without mixing records', 
   assert.equal((await restarted.rows('D'))[0].result,'失败');
   (await restarted.open()).close();
 });
+test("prune deletes every record of replaced tasks and keeps the latest task of each business", async () => {
+  const h=fixture();
+  const records=id=>({rows:[{orderNo:"O-"+id,referenceNo:"R-"+id,result:"成功"}],pairs:[{referenceNo:"R-"+id,orderNo:"O-"+id,status:"complete",files:{}}],
+    pages:[{page:1,rows:[{merOrderId:"O-"+id}]}],logs:Array.from({length:600},(_,i)=>({message:id+i}))});
+  await h.store.save({...task(),id:"A1",business:"appliance"},records("A1"));
+  await h.store.save({...task(),id:"D1",business:"digital"},records("D1"));
+  await h.store.save({...task(),id:"A2",business:"appliance"},records("A2"));
+  await h.store.prune();
+  assert.equal(await h.store.getTask("A1"),null);
+  for (const read of [id=>h.store.rows(id),id=>h.store.pairs(id),id=>h.store.logs(id,Infinity)]) assert.deepEqual(await read("A1"),[]);
+  assert.equal(await h.store.getPage("A1",1),null);
+  for (const id of ["D1","A2"]) {
+    assert.equal((await h.store.getTask(id)).id,id);
+    assert.equal((await h.store.rows(id)).length,1);
+    assert.equal((await h.store.pairs(id)).length,1);
+    assert.equal((await h.store.logs(id,Infinity)).length,600);
+    assert.ok(await h.store.getPage(id,1));
+  }
+  assert.equal((await h.store.getBusinessTask("appliance")).id,"A2");
+  assert.equal((await h.store.getBusinessTask("digital")).id,"D1");
+});
