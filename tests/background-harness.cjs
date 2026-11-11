@@ -67,7 +67,9 @@ function harness(options = {}, initial = null) {
   vm.runInContext(fs.readFileSync(path.join(__dirname, "../background.js"), "utf8"), sandbox);
   const send = (message, source = sender) => new Promise(resolve => listener(message, source, resolve));
   const begin = (tradeDateRange = ["20261001", "20261004"]) => send({ type: "PIC_EXPERT_TASK_BEGIN", tabId: 7, frameId: 4, tradeDateRange }, {});
-  const pair = taskId => send({ type: "PIC_EXPERT_DOWNLOAD_PAIR", taskId, orderNo: "O1", referenceNo: "R1", assets });
+  // Settles order O1/R1 as a success with the default images; the response row says whether saving worked.
+  const pair = (taskId, extra = {}, source) => send({ type: "PIC_EXPERT_ORDER_SETTLE", taskId, note: "",
+    row: { orderNo: "O1", referenceNo: "R1", result: "成功", reason: "" }, assets, ...extra }, source);
   return { send, begin, pair, calls, removed, items, store, notify, handlers, task: () => store.snapshot() };
 }
 module.exports = { harness, assets };

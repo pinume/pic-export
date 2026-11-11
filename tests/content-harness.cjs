@@ -34,11 +34,10 @@ function harness(pages, options = {}) {
     sendMessage: async message => {
       messages.push(message);
       options.onMessage?.(message, value => { currentFilters = value; });
-      if (message.type === "PIC_EXPERT_MANIFEST_ROW" && pauseAfterRow) listener({ type: "PIC_EXPERT_PAUSE" }, {}, () => {});
+      if (message.type === "PIC_EXPERT_ORDER_SETTLE" && pauseAfterRow) listener({ type: "PIC_EXPERT_PAUSE" }, {}, () => {});
       if (options.sendMessage) return options.sendMessage(message);
       if (message.type === "PIC_EXPERT_LIST_PAGE") savedPages.set(message.page, { page: message.page, rows: message.rows });
       if (message.type === "PIC_EXPERT_LIST_GET") return { ok: true, page: savedPages.get(message.page) || null };
-      if (message.type === "PIC_EXPERT_DOWNLOAD_PAIR") return { ok: true, files: {} };
       return { ok: true };
     }
   } };

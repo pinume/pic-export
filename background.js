@@ -1,5 +1,5 @@
 importScripts("core.js", "materials.js", "store.js", "order-downloads.js");
-const { buildManifestCsv, makeTaskId, cleanText, MAX_ORDERS } = globalThis.PIC_EXPERT_CORE;
+const { buildManifestCsv, makeTaskId, cleanText } = globalThis.PIC_EXPERT_CORE;
 const db = globalThis.PIC_EXPERT_STORE;
 const MATERIALS = globalThis.PIC_EXPERT_MATERIALS, BUSINESSES = Object.keys(MATERIALS);
 const endings = new Map(), manifestExports = new Map();
@@ -237,22 +237,11 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
           t.page = message.checkpoint.page;
           t.total = message.checkpoint.total;
         }) };
-      case "PIC_EXPERT_ROW_STATUS": return { ok: true, ...await orders.status(message, sender) };
+      case "PIC_EXPERT_ORDER_CLAIM": return { ok: true, ...await orders.claim(message, sender) };
+      case "PIC_EXPERT_ORDER_SETTLE": return { ok: true, ...await orders.settle(message, sender) };
       case "PIC_EXPERT_LOG":
         await update(message.taskId, sender, (_t, c) => appendLog(c, message.stage, message.message, message.level), false);
         return { ok: true };
-      case "PIC_EXPERT_DOWNLOAD_PAIR": return { ok: true, files: await orders.download(message, sender) };
-      case "PIC_EXPERT_ROW_BEGIN":
-        return { ok: true, task: await update(message.taskId, sender, (t, c) => {
-          if (!message.identity?.orderNo || !message.identity.referenceNo) throw new Error("订单身份不完整。");
-          t.currentRows ||= [];
-          if (t.currentRows.some(row => row.orderNo === message.identity.orderNo && row.referenceNo === message.identity.referenceNo)) return;
-          if (t.currentRows.length >= MAX_ORDERS) throw new Error("同时处理的订单不能超过 " + MAX_ORDERS + " 笔。");
-          t.currentRows.push({ ...message.identity, page: t.page, ...(message.note ? { note: message.note } : {}) });
-          appendLog(c, "检查订单", "订单 " + message.identity.orderNo + "，参考号 " + message.identity.referenceNo);
-        }) };
-      case "PIC_EXPERT_MANIFEST_ROW":
-        return { ok: true, task: await orders.recordResult(message, sender) };
       case "PIC_EXPERT_TASK_END": return { ok: true, task: await summary(await finalizeTask(message, sender)) };
       case "PIC_EXPERT_TASK_HALT":
         return { ok: true, task: await update(message.taskId, sender, t => { t.status = "stopping"; t.error = message.error || "任务中断。"; }) };

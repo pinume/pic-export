@@ -27,12 +27,13 @@ test('manual business selection resumes without an account identity', async () =
   assert.equal(h.task().tabId,8);
   assert.equal(h.task().accountId,undefined);
 });
-test('digital download preserves template names and rolls back an incomplete order', async () => {
-  const h=harness({failFilename:'系统IMEI码照片.jpg'});
+test('digital download keeps the selected names and rolls back an incomplete order', async () => {
+  const h=harness({failFilename:'IMEI.jpg'});
   const {task}=await h.send({type:'PIC_EXPERT_TASK_BEGIN',business:'digital',tabId:7,frameId:4,tradeDateRange:['20261001','20261011']},{});
   const asset={extension:'.jpg',url:'data:image/jpeg;base64,/9j/'};
-  const result=await h.send({type:'PIC_EXPERT_DOWNLOAD_PAIR',taskId:task.id,orderNo:'O1',referenceNo:'R1',assets:{'商品SN照片':asset,'系统IMEI码照片':asset,'发票图片':asset}}, {tab:{id:7},frameId:4});
-  assert.equal(result.ok,false);
+  const result=await h.send({type:'PIC_EXPERT_ORDER_SETTLE',taskId:task.id,note:'',row:{orderNo:'O1',referenceNo:'R1',result:'成功',reason:''},assets:{'二合一照片':asset,'IMEI':asset,'发票':asset}}, {tab:{id:7},frameId:4});
+  assert.equal(result.row.result,'失败');
+  assert.match(h.calls[0].filename,/\/R1\/二合一照片\.jpg$/);
   assert.equal(h.calls.length,2);
   assert.deepEqual(h.removed,[1]);
 });

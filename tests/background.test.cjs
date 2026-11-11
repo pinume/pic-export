@@ -1,6 +1,9 @@
 const test = require("node:test");
 const assert = require("node:assert/strict");
 const { harness, assets } = require("./background-harness.cjs");
+// A settle response saved the order only when it records success; save failures come back as a failed row.
+const saved = response => response.ok && response.row?.result === "成功";
+const claim = (h, taskId, extra = {}, source) => h.send({ type: "PIC_EXPERT_ORDER_CLAIM", taskId, identity: { orderNo: "O1", referenceNo: "R1" }, ...extra }, source);
 
 test("concurrent starts create one task", async () => {
   const h = harness();
@@ -10,11 +13,11 @@ test("concurrent starts create one task", async () => {
 test("duplicate pair messages download one correctly named pair", async () => {
   const h = harness(), { task } = await h.begin();
   const responses = await Promise.all([h.pair(task.id), h.pair(task.id)]);
-  assert.ok(responses.every(r => r.ok));
+  assert.ok(responses.every(saved));
   assert.equal(h.calls.length, 2);
   assert.match(h.calls[0].filename, /\/R1\/SN图片\.jpg$/);
   assert.match(h.calls[1].filename, /\/R1\/发票\.png$/);
-  assert.ok((await h.pair(task.id)).ok);
+  assert.ok(saved(await h.pair(task.id)));
   assert.equal(h.calls.length, 2);
 });
 test("date range prefixes every new task download path", async () => {
@@ -40,28 +43,31 @@ test("new task creation rejects missing or malformed trade date ranges", async (
 });
 test("messages from another frame cannot download", async () => {
   const h = harness(), { task } = await h.begin();
-  const response = await h.send({ type: "PIC_EXPERT_DOWNLOAD_PAIR", taskId: task.id, orderNo: "O1", referenceNo: "R1", assets }, { tab: { id: 7 }, frameId: 0 });
+  const response = await h.pair(task.id, {}, { tab: { id: 7 }, frameId: 0 });
   assert.equal(response.ok, false);
   assert.equal(h.calls.length, 0);
 });
 test("failed invoice rolls back the pair and never marks success", async () => {
   const h = harness({ failInvoice: true }), { task } = await h.begin();
-  assert.equal((await h.pair(task.id)).ok, false);
+  const response = await h.pair(task.id);
+  assert.equal(saved(response), false);
+  assert.equal(response.row.reason, "NETWORK_FAILED");
+  assert.equal(h.task().manifestRows[0].result, "失败");
   assert.equal(h.task().downloads.R1.status, "failed");
   assert.deepEqual(h.removed, [1]);
   assert.deepEqual(h.task().downloads.R1.files, {});
 });
 test("failed rollback retains the actual leftover path", async () => {
   const h = harness({ failInvoice: true, failRemove: true }), { task } = await h.begin();
-  const response = await h.pair(task.id);
-  assert.equal(response.ok, false);
-  assert.match(response.files["SN图片"].filename, /SN图片\.jpg$/);
+  assert.equal(saved(await h.pair(task.id)), false);
+  assert.match(h.task().downloads.R1.files["SN图片"].filename, /SN图片\.jpg$/);
 });
 test("reference cannot be reused for a different order", async () => {
   const h = harness(), { task } = await h.begin();
   await h.pair(task.id);
-  const result = await h.send({ type: "PIC_EXPERT_DOWNLOAD_PAIR", taskId: task.id, orderNo: "O2", referenceNo: "R1", assets });
-  assert.equal(result.ok, false);
+  const result = await h.pair(task.id, { row: { orderNo: "O2", referenceNo: "R1", result: "成功", reason: "" } });
+  assert.equal(saved(result), false);
+  assert.match(result.row.reason, /同一参考号对应多个订单/);
   assert.equal(h.calls.length, 2);
 });
 test("duplicate end messages produce one manifest", async () => {
@@ -186,9 +192,8 @@ test("paired downloads and CSV completion are persisted in task logs", async () 
 const multiAssets = {"SN图片-1":assets["SN图片"],"SN图片-2":assets["发票"],"发票-1":assets["发票"],"发票-2":assets["SN图片"],"发票-3":assets["发票"]};
 test("duplicate messages download five files once and export a four-column CSV", async () => {
   const h = harness(), {task} = await h.begin();
-  const message = {type:"PIC_EXPERT_DOWNLOAD_PAIR",taskId:task.id,orderNo:"O1",referenceNo:"R1",assets:multiAssets};
-  const results = await Promise.all([h.send(message),h.send(message)]);
-  assert.ok(results.every(r => r.ok));
+  const results = await Promise.all([h.pair(task.id,{assets:multiAssets}),h.pair(task.id,{assets:multiAssets})]);
+  assert.ok(results.every(saved));
   assert.equal(h.calls.length, 5);
   assert.match(h.calls[2].filename, /\/R1\/发票-1.png$/);
   assert.match(h.calls[3].filename, /\/R1\/发票-2.jpg$/);
@@ -199,8 +204,7 @@ test("duplicate messages download five files once and export a four-column CSV",
 });
 test("failed numbered image rolls back every file of the order and never succeeds", async () => {
   const h = harness({failProof:"发票-2"}), {task} = await h.begin();
-  const response = await h.send({type:"PIC_EXPERT_DOWNLOAD_PAIR",taskId:task.id,orderNo:"O1",referenceNo:"R1",assets:multiAssets});
-  assert.equal(response.ok, false);
+  assert.equal(saved(await h.pair(task.id,{assets:multiAssets})), false);
   assert.equal(h.calls.length, 4);
   assert.deepEqual(h.removed, [1,2,3]);
   await h.send({type:"PIC_EXPERT_TASK_END",taskId:task.id,status:"completed"});
@@ -209,7 +213,7 @@ test("failed numbered image rolls back every file of the order and never succeed
 });
 test("failed cleanup retains its path in download records", async () => {
   const h = harness({failProof:"发票-2",failRemoveId:3}), {task} = await h.begin();
-  await h.send({type:"PIC_EXPERT_DOWNLOAD_PAIR",taskId:task.id,orderNo:"O1",referenceNo:"R1",assets:multiAssets});
+  await h.pair(task.id,{assets:multiAssets});
   await h.send({type:"PIC_EXPERT_TASK_END",taskId:task.id,status:"failed"});
   assert.match(h.task().downloads.R1.files["发票-1"].filename, /发票-1.png$/);
   assert.equal(h.task().downloads.R1.files["SN图片-1"], undefined);
@@ -217,7 +221,7 @@ test("failed cleanup retains its path in download records", async () => {
 test("missing required pair, proof images or invalid format create no downloads", async () => {
   const h = harness(), {task} = await h.begin();
   for (const value of [{"SN图片":assets["SN图片"]},{...assets,"证明材料图一":assets["SN图片"]},{...assets,"发票":{extension:".html",url:"data:text/html;base64,AA=="}}]) {
-    assert.equal((await h.send({type:"PIC_EXPERT_DOWNLOAD_PAIR",taskId:task.id,orderNo:"O1",referenceNo:"R1",assets:value})).ok, false);
+    assert.equal(saved(await h.pair(task.id,{assets:value})), false);
   }
   assert.equal(h.calls.length, 0);
 });
@@ -226,7 +230,6 @@ const saveCheckpoint = (h,id) => h.send({type:"PIC_EXPERT_CHECKPOINT",taskId:id,
 test("graceful pause preserves the task directory and completed files without exporting partial CSV", async () => {
   const h=harness({livePage:true}),{task}=await h.begin();
   await saveCheckpoint(h,task.id); await h.pair(task.id);
-  await h.send({type:"PIC_EXPERT_MANIFEST_ROW",taskId:task.id,row:{orderNo:"O1",referenceNo:"R1",result:"成功",reason:""}});
   await h.send({type:"PIC_EXPERT_TASK_PAUSE"},{});
   assert.equal(h.task().status,"pausing");
   await h.send({type:"PIC_EXPERT_TASK_PAUSED",taskId:task.id});
@@ -236,37 +239,34 @@ test("graceful pause preserves the task directory and completed files without ex
   assert.equal(resumed.task.id,task.id);
   assert.equal(resumed.task.folderName,task.folderName);
   assert.equal(resumed.task.completed,1);
-  assert.equal((await h.send({type:"PIC_EXPERT_ROW_STATUS",taskId:task.id,identity:{orderNo:"O1",referenceNo:"R1"}})).done,true);
+  assert.equal((await claim(h,task.id)).done,true);
 });
 test("worker restart preserves completed rows and can rebind continuation to a new frame", async () => {
   const h=harness(),{task}=await h.begin(); await saveCheckpoint(h,task.id); await h.pair(task.id);
-  await h.send({type:"PIC_EXPERT_MANIFEST_ROW",taskId:task.id,row:{orderNo:"O1",referenceNo:"R1",result:"成功",reason:""}});
   await h.send({type:"PIC_EXPERT_TASK_PAUSE"},{});
   const restarted=harness({store:h.store,items:h.items});
   assert.ok((await restarted.send({type:"PIC_EXPERT_TASK_RESUME",tabId:7,frameId:9},{})).ok);
   assert.equal((await restarted.pair(task.id)).ok,false);
-  const response=await restarted.send({type:"PIC_EXPERT_ROW_STATUS",taskId:task.id,identity:{orderNo:"O1",referenceNo:"R1"}},{tab:{id:7},frameId:9});
+  const response=await claim(restarted,task.id,{},{tab:{id:7},frameId:9});
   assert.equal(response.done,true);
   assert.equal(restarted.calls.length,0);
 });
 test("missing completed files are redownloaded rather than blindly skipped", async () => {
   const h=harness(),{task}=await h.begin(); await saveCheckpoint(h,task.id); await h.pair(task.id);
-  await h.send({type:"PIC_EXPERT_MANIFEST_ROW",taskId:task.id,row:{orderNo:"O1",referenceNo:"R1",result:"成功",reason:""}});
   h.items.get(1).exists=false;
-  assert.equal((await h.send({type:"PIC_EXPERT_ROW_STATUS",taskId:task.id,identity:{orderNo:"O1",referenceNo:"R1"}})).done,false);
-  assert.ok((await h.pair(task.id)).ok);
+  assert.equal((await claim(h,task.id)).done,false);
+  assert.ok(saved(await h.pair(task.id)));
   assert.equal(h.calls.length,4);
 });
 test("failed pair is only retried after explicit continuation, never by duplicate messages", async () => {
   const options={failInvoice:true}, h=harness(options),{task}=await h.begin(); await saveCheckpoint(h,task.id);
-  assert.equal((await h.pair(task.id)).ok,false);
-  assert.equal((await h.pair(task.id)).ok,false);
+  assert.equal(saved(await h.pair(task.id)),false);
+  assert.equal(saved(await h.pair(task.id)),false);
   assert.equal(h.calls.length,2);
   await h.send({type:"PIC_EXPERT_TASK_END",taskId:task.id,status:"failed"});
   await h.send({type:"PIC_EXPERT_TASK_RESUME",tabId:7,frameId:4},{});
   options.failInvoice=false;
-  assert.ok((await h.pair(task.id)).ok);
-  await h.send({type:"PIC_EXPERT_MANIFEST_ROW",taskId:task.id,row:{orderNo:"O1",referenceNo:"R1",result:"成功",reason:""}});
+  assert.ok(saved(await h.pair(task.id)));
   assert.equal(h.task().scanned,1);
   assert.equal(h.task().completed,1);
   assert.equal(h.task().failed,0);
@@ -319,7 +319,7 @@ test("native completion events release waiters and listeners are removed afterwa
   h.notify(1,"complete");
   while(!h.task().downloads.R1?.files["发票"]) await new Promise(setImmediate);
   h.notify(2,"complete");
-  assert.ok((await download).ok);
+  assert.ok(saved(await download));
   assert.equal(h.handlers.size,0);
 });
 test("concurrent manifest retries start only one replacement CSV download", async () => {
@@ -347,18 +347,18 @@ test("continuation retains locked leftovers and retries after the user removes t
   const options = { failInvoice: true, failRemove: true };
   const h = harness(options), { task } = await h.begin();
   await saveCheckpoint(h, task.id);
-  assert.equal((await h.pair(task.id)).ok, false);
+  assert.equal(saved(await h.pair(task.id)), false);
   await h.send({ type: "PIC_EXPERT_TASK_END", taskId: task.id, status: "failed" });
   await h.send({ type: "PIC_EXPERT_TASK_RESUME", tabId: 7, frameId: 4 }, {});
   options.failInvoice = false;
   const before = h.calls.length;
-  assert.equal((await h.pair(task.id)).ok, false);
+  assert.equal(saved(await h.pair(task.id)), false);
   assert.equal(h.calls.length, before);
   assert.ok(h.task().downloads.R1.files["SN图片"]);
   await h.send({ type: "PIC_EXPERT_TASK_END", taskId: task.id, status: "failed" });
   h.items.get(1).exists = false;
   await h.send({ type: "PIC_EXPERT_TASK_RESUME", tabId: 7, frameId: 4 }, {});
-  assert.equal((await h.pair(task.id)).ok, true);
+  assert.ok(saved(await h.pair(task.id)));
   assert.equal(h.task().downloads.R1.status, "complete");
   assert.ok(h.task().downloads.R1.files["SN图片"].downloadId !== 1);
 });
@@ -394,33 +394,32 @@ test("worker restart reconciles every in-flight identity and retains completed r
   assert.deepEqual(h.task().downloads.R1.files, {});
 });
 
-test("duplicate row messages do not occupy extra slots or double count results", async () => {
+test("duplicate claim and settle messages do not occupy extra slots or double count results", async () => {
   const h = harness(), { task } = await h.begin();
   const identity = { orderNo: "O1", referenceNo: "R1" };
-  await Promise.all(Array.from({ length: 3 }, () => h.send({ type: "PIC_EXPERT_ROW_BEGIN", taskId: task.id, identity })));
+  await Promise.all(Array.from({ length: 3 }, () => claim(h, task.id)));
   assert.equal(h.task().currentRows.length, 1);
   const row = { ...identity, result: "跳过", reason: "材料修改" };
-  await Promise.all(Array.from({ length: 3 }, () => h.send({ type: "PIC_EXPERT_MANIFEST_ROW", taskId: task.id, row })));
+  await Promise.all(Array.from({ length: 3 }, () => h.send({ type: "PIC_EXPERT_ORDER_SETTLE", taskId: task.id, note: "材料修改", row })));
   assert.deepEqual([h.task().currentRows.length, h.task().scanned, h.task().skipped], [0, 1, 1]);
 });
 
 test("recovery retains material modification notes for completed numbered files and orders interrupted before saving", async () => {
-  for (const saved of [false, true]) {
+  for (const settled of [false, true]) {
     const h = harness(), { task } = await h.begin();
-    const identity = { orderNo: "O1", referenceNo: "R1" };
-    await h.send({ type: "PIC_EXPERT_ROW_BEGIN", taskId: task.id, identity, note: "材料修改" });
-    if (saved) {
-      const result = await h.send({ type: "PIC_EXPERT_DOWNLOAD_PAIR", taskId: task.id, ...identity, note: "材料修改",
+    await claim(h, task.id, { note: "材料修改" });
+    if (settled) {
+      const result = await h.pair(task.id, { note: "材料修改", row: { orderNo: "O1", referenceNo: "R1", result: "成功", reason: "材料修改" },
         assets: { "SN图片-2": assets["SN图片"], "发票": assets["发票"], "SN图片-1": assets["SN图片"] } });
-      assert.equal(result.ok, true);
+      assert.ok(saved(result));
       assert.deepEqual(h.calls.map(call => call.filename.split("/").at(-1)), ["SN图片-1.jpg", "SN图片-2.jpg", "发票.png"]);
     }
     const restarted = harness({ store: h.store, items: h.items });
     await restarted.send({ type: "PIC_EXPERT_TASK_STOP" }, {});
     const result = h.task().manifestRows[0];
-    assert.equal(result.result, saved ? "成功" : "失败");
+    assert.equal(result.result, settled ? "成功" : "失败");
     assert.match(result.reason, /材料修改/);
-    if (saved) assert.equal(result.reason, "材料修改");
+    if (settled) assert.equal(result.reason, "材料修改");
     else assert.match(result.reason, /用户停止/);
     assert.match(decodeURIComponent(restarted.calls[0].url), /材料修改/);
   }
@@ -430,7 +429,7 @@ test("continuation rechecks orders skipped by removed rules and keeps genuine mi
   for (const [reason, done] of [["材料修改", false], ["SN码或发票图片缺失或不唯一", false], ["SN码或发票图片缺失", true]]) {
     const h = harness({}, { id: "T1", status: "running", tabId: 7, frameId: 4,
       manifestRows: [{ orderNo: "O1", referenceNo: "R1", result: "跳过", reason }] });
-    const result = await h.send({ type: "PIC_EXPERT_ROW_STATUS", taskId: "T1", identity: { orderNo: "O1", referenceNo: "R1" } });
+    const result = await claim(h, "T1");
     assert.equal(result.ok, true);
     assert.equal(result.done, done);
   }

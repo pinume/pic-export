@@ -255,20 +255,20 @@ test("failure of a later numbered image rolls back every file of only that order
   assert.equal((await f.store.getRow(task.id, { orderNo: "O1", referenceNo: "R1" })).reason, "材料修改");
 });
 
-for (const action of ["PAUSE", "STOP"]) for (const reportedFailure of [false, true]) {
-  test(`worker restart after image completion preserves ${reportedFailure ? "reported failure" : "unreported success"} on ${action}`, async t => {
+for (const action of ["PAUSE", "STOP"]) {
+  test(`worker restart after images are saved but before the result is recorded keeps the success on ${action}`, async t => {
     const f = await flow(t, [[row("O1", "R1")]]);
     const identity = { orderNo: "O1", referenceNo: "R1" };
-    assert.ok((await f.backend.send({ type: "PIC_EXPERT_ROW_BEGIN", taskId: f.task.id, identity })).ok);
-    assert.ok((await f.backend.send({ type: "PIC_EXPERT_DOWNLOAD_PAIR", taskId: f.task.id, ...identity,
-      assets: { ...assets, "发票-2": assets["发票"] } })).ok);
-    // Files complete before the page confirms its final result.
+    assert.equal((await f.backend.send({ type: "PIC_EXPERT_ORDER_CLAIM", taskId: f.task.id, identity })).done, false);
+    // The worker stops inside settle: the images are saved, but the result row is never written.
+    const save = f.store.save.bind(f.store);
+    f.store.save = (task, changes) => changes.rows?.length ? Promise.reject(new Error("worker stopped")) : save(task, changes);
+    assert.equal((await f.backend.send({ type: "PIC_EXPERT_ORDER_SETTLE", taskId: f.task.id, note: "",
+      row: { ...identity, result: "成功", reason: "" }, assets: { ...assets, "发票-2": assets["发票"] } })).ok, false);
     assert.equal((await f.store.getPair(f.task.id, "R1")).status, "complete");
     assert.equal(await f.store.getRow(f.task.id, identity), null);
     const before = await f.store.getTask();
     assert.deepEqual([before.scanned, before.completed, before.failed, before.currentRows.length], [0, 0, 0, 1]);
-    if (reportedFailure) assert.ok((await f.backend.send({ type: "PIC_EXPERT_MANIFEST_ROW", taskId: f.task.id,
-      row: { ...identity, result: "失败", reason: "页面中断" } })).ok);
 
     const store = new TaskStore(f.store.storage, f.store.databaseName);
     t.after(async () => (await store.open()).close());
@@ -279,10 +279,9 @@ for (const action of ["PAUSE", "STOP"]) for (const reportedFailure of [false, tr
     assert.equal(task.id, f.task.id);
     assert.equal(task.folderName, f.task.folderName);
     assert.equal(task.status, action === "PAUSE" ? "paused" : "failed");
-    assert.deepEqual([task.scanned, task.completed, task.failed, task.currentRows.length],
-      [1, reportedFailure ? 0 : 1, reportedFailure ? 1 : 0, 0]);
-    assert.equal(result.result, reportedFailure ? "失败" : "成功");
-    assert.equal(result.reason, reportedFailure ? "页面中断" : "");
+    assert.deepEqual([task.scanned, task.completed, task.failed, task.currentRows.length], [1, 1, 0, 0]);
+    assert.equal(result.result, "成功");
+    assert.equal(result.reason, "");
     const directory = "pic-expert/" + task.folderName + "/R1/";
     assert.deepEqual(f.backend.calls.map(call => call.filename),
       [directory + "SN图片.jpg", directory + "发票.png", directory + "发票-2.png"]);

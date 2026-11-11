@@ -67,14 +67,14 @@
   const identity = row => ({ orderNo: FILES.cleanText(row.merOrderId), referenceNo: FILES.cleanText(row.transRef) });
   const processRow = async (row, client, taskId, ensureActive, note, business) => {
     const id = identity(row);
-    if (!id.orderNo || !id.referenceNo) return { ...id, result: "失败", reason: "订单号或参考号缺失" };
+    if (!id.orderNo || !id.referenceNo) return { row: { ...id, result: "失败", reason: "订单号或参考号缺失" } };
     const reason = message => [note, message].filter(Boolean).join("；");
     try {
       await log("读取详情", "订单 " + id.orderNo + "，参考号 " + id.referenceNo);
       const states = await client.assets(row, location.origin, business);
       ensureActive();
       if (states.missing.length) {
-        return { ...id, result: "跳过", reason: reason(states.missing.join("；")) };
+        return { row: { ...id, result: "跳过", reason: reason(states.missing.join("；")) } };
       }
       const assets = states.files;
       const kinds = Object.keys(assets);
@@ -96,12 +96,11 @@
       const failure = results.find(result => result.status === "rejected" && result.reason.auth) ||
         results.find(result => result.status === "rejected");
       if (failure) throw failure.reason;
-      ensureActive();
-      await checkedSend({ type: "PIC_EXPERT_DOWNLOAD_PAIR", taskId, ...id, assets: prepared, note });
-      return { ...id, result: "成功", reason: note };
+      // The background saves the images and records a failure itself if saving fails.
+      return { row: { ...id, result: "成功", reason: note }, assets: prepared };
     } catch (error) {
       if (error.auth || error.fatal) { requestController.abort(error); throw error; }
-      return { ...id, result: "失败", reason: reason(error.message) };
+      return { row: { ...id, result: "失败", reason: reason(error.message) } };
     }
   };
   const loadPage = async (client, context, page, total = null) => {
@@ -228,15 +227,11 @@
               ensureActive();
               visited += 1;
               if (visited > total) throw new Error("扫描条数超过原查询总条数。");
-              const status = await checkedSend({ type: "PIC_EXPERT_ROW_STATUS", taskId, identity: id });
-              if (status.done) continue;
-              if (pauseRequested || stopped || failure) return;
-              ensureActive();
               const note = CORE.isMaterialModification([row.statusDesc, row.statusText].join(" ")) ? "材料修改" : "";
-              await checkedSend({ type: "PIC_EXPERT_ROW_BEGIN", taskId, identity: id, note });
+              if ((await checkedSend({ type: "PIC_EXPERT_ORDER_CLAIM", taskId, identity: id, note })).done) continue;
               const outcome = await processRow(row, client, taskId, ensureActive, note, task.business);
               ensureActive();
-              await checkedSend({ type: "PIC_EXPERT_MANIFEST_ROW", taskId, row: outcome });
+              await checkedSend({ type: "PIC_EXPERT_ORDER_SETTLE", taskId, note, ...outcome });
             } catch (error) {
               if (!stopped && !forcePauseRequested) await halt(error);
               return;

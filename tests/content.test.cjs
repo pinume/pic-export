@@ -13,7 +13,7 @@ test("whole-list request is independent of the visible page and completes before
   });
   await h.run("T1");
   assert.deepEqual(h.calls.map(({ page, size }) => ({ page, size })), [{ page: 0, size: 10000 }]);
-  assert.equal(h.messages.filter(m => m.type === "PIC_EXPERT_MANIFEST_ROW").length, 33);
+  assert.equal(h.messages.filter(m => m.type === "PIC_EXPERT_ORDER_SETTLE").length, 33);
   assert.equal(h.messages.at(-1).status, "completed");
 });
 
@@ -21,7 +21,7 @@ test("whole-list truncation or duplicate identities pause before reading assets"
   for (const rows of [[row("O1", "R1")], [row("O1", "R1"), row("O1", "R1")]]) {
     const h = harness([rows], { listSize: 10000, hasOtherFilters: true, list: () => ({ rows, total: 2 }) });
     await h.run("T1");
-    assert.equal(h.messages.some(m => m.type === "PIC_EXPERT_ROW_BEGIN"), false);
+    assert.equal(h.messages.some(m => m.type === "PIC_EXPERT_ORDER_CLAIM"), false);
     assert.equal(h.messages.at(-1).type, "PIC_EXPERT_TASK_AUTO_PAUSE");
   }
 });
@@ -35,8 +35,8 @@ test("whole-list continuation keeps the saved request size and skips completed o
     sendMessage: async m => {
       if (m.type === "PIC_EXPERT_LIST_PAGE") pages.set(m.page, { rows: m.rows });
       if (m.type === "PIC_EXPERT_LIST_GET") return { ok: true, page: pages.get(m.page) || null };
-      if (m.type === "PIC_EXPERT_ROW_STATUS") return { ok: true, done: completed.has(m.identity.orderNo) };
-      if (m.type === "PIC_EXPERT_MANIFEST_ROW") completed.add(m.row.orderNo);
+      if (m.type === "PIC_EXPERT_ORDER_CLAIM") return { ok: true, done: completed.has(m.identity.orderNo) };
+      if (m.type === "PIC_EXPERT_ORDER_SETTLE") completed.add(m.row.orderNo);
       return { ok: true, files: {} };
     }
   });
@@ -44,7 +44,7 @@ test("whole-list continuation keeps the saved request size and skips completed o
   const checkpoint = h.messages.findLast(m => m.type === "PIC_EXPERT_CHECKPOINT").checkpoint;
   await h.run("T1", checkpoint);
   assert.deepEqual(h.calls.map(c => c.size), [10000, 10000]);
-  assert.equal(h.messages.filter(m => m.type === "PIC_EXPERT_DOWNLOAD_PAIR").length, 3);
+  assert.equal(h.messages.filter(m => m.type === "PIC_EXPERT_ORDER_SETTLE" && m.assets).length, 3);
   assert.equal(h.messages.at(-1).status, "completed");
 });
 
@@ -67,7 +67,7 @@ test("all API pages and previously excluded statuses are processed", async () =>
   const h = harness([[row("O1", "R1", "08"), row("O2", "R2")], [row("O3", "R3")]]);
   await h.run("T1");
   assert.deepEqual(h.calls.map(call => call.page), [0, 1]);
-  assert.deepEqual(h.messages.filter(message => message.type === "PIC_EXPERT_MANIFEST_ROW").map(message => message.row.result), ["成功", "成功", "成功"]);
+  assert.deepEqual(h.messages.filter(message => message.type === "PIC_EXPERT_ORDER_SETTLE").map(message => message.row.result), ["成功", "成功", "成功"]);
   assert.equal(h.messages.at(-1).status, "completed");
 });
 
@@ -81,7 +81,7 @@ test("material modification is a CSV note on success, missing required images an
       }
     });
     await h.run("T1");
-    const result = h.messages.find(message => message.type === "PIC_EXPERT_MANIFEST_ROW").row;
+    const result = h.messages.find(message => message.type === "PIC_EXPERT_ORDER_SETTLE").row;
     assert.equal(result.result, { success: "成功", missing: "跳过", failure: "失败" }[mode]);
     assert.equal(result.reason, { success: "材料修改", missing: "材料修改；必填图片缺失：发票", failure: "材料修改；读取详情失败" }[mode]);
   }
@@ -107,7 +107,7 @@ test("API results that do not match the displayed query stop before order proces
     visiblePage: { page: 1, total: 2, signature: "OTHER::QUERY" }
   });
   await h.run("T1");
-  assert.equal(h.messages.some(message => message.type === "PIC_EXPERT_ROW_BEGIN"), false);
+  assert.equal(h.messages.some(message => message.type === "PIC_EXPERT_ORDER_CLAIM"), false);
   assert.match(h.messages.at(-1).error, /与页面当前查询不一致/);
 });
 
@@ -118,16 +118,16 @@ test("other website filters do not narrow the date-and-status list or block its 
   });
   await h.run("T1");
   assert.deepEqual(h.calls.map(call => call.page), [0, 1]);
-  assert.equal(h.messages.filter(message => message.type === "PIC_EXPERT_MANIFEST_ROW").length, 3);
+  assert.equal(h.messages.filter(message => message.type === "PIC_EXPERT_ORDER_SETTLE").length, 3);
   assert.equal(h.messages.at(-1).status, "completed");
 });
 
 test("a changed query filter stops before processing the next order", async () => {
   const h = harness([[row("O1", "R1"), row("O2", "R2")]], {
-    onMessage: (message, setFilters) => { if (message.type === "PIC_EXPERT_MANIFEST_ROW") setFilters({ status: ["01"] }); }
+    onMessage: (message, setFilters) => { if (message.type === "PIC_EXPERT_ORDER_SETTLE") setFilters({ status: ["01"] }); }
   });
   await h.run("T1");
-  assert.equal(h.messages.filter(item => item.type === "PIC_EXPERT_ROW_BEGIN").length, 2);
+  assert.equal(h.messages.filter(item => item.type === "PIC_EXPERT_ORDER_CLAIM").length, 2);
   assert.match(h.messages.at(-1).error, /查询条件或页面发生变化/);
 });
 
@@ -151,8 +151,8 @@ test("authentication failure stops the task instead of marking every order faile
     assets: () => { const error = new Error("登录状态已失效"); error.auth = true; throw error; }
   });
   await h.run("T1");
-  assert.equal(h.messages.filter(message => message.type === "PIC_EXPERT_ROW_BEGIN").length, 2);
-  assert.equal(h.messages.some(message => message.type === "PIC_EXPERT_MANIFEST_ROW"), false);
+  assert.equal(h.messages.filter(message => message.type === "PIC_EXPERT_ORDER_CLAIM").length, 2);
+  assert.equal(h.messages.some(message => message.type === "PIC_EXPERT_ORDER_SETTLE"), false);
   assert.equal(h.messages.at(-1).type, "PIC_EXPERT_TASK_AUTO_PAUSE");
 });
 
@@ -160,7 +160,7 @@ test("pause is saved at the order boundary", async () => {
   const h = harness([[row("O1", "R1"), row("O2", "R2")]]);
   h.pauseAfterNextRow();
   await h.run("T1");
-  assert.equal(h.messages.filter(message => message.type === "PIC_EXPERT_ROW_BEGIN").length, 2);
+  assert.equal(h.messages.filter(message => message.type === "PIC_EXPERT_ORDER_CLAIM").length, 2);
   assert.equal(h.messages.at(-1).type, "PIC_EXPERT_TASK_PAUSED");
 });
 
@@ -174,9 +174,9 @@ test("image authentication errors stop before the next order even when another i
       }
     });
     await h.run("T1");
-    assert.equal(h.messages.filter(m => m.type === "PIC_EXPERT_ROW_BEGIN").length, 2);
-    assert.equal(h.messages.some(m => m.type === "PIC_EXPERT_MANIFEST_ROW"), false);
-    assert.equal(h.messages.some(m => m.type === "PIC_EXPERT_DOWNLOAD_PAIR"), false);
+    assert.equal(h.messages.filter(m => m.type === "PIC_EXPERT_ORDER_CLAIM").length, 2);
+    assert.equal(h.messages.some(m => m.type === "PIC_EXPERT_ORDER_SETTLE"), false);
+    assert.equal(h.messages.some(m => m.type === "PIC_EXPERT_ORDER_SETTLE" && m.assets), false);
     assert.equal(h.messages.at(-1).type, "PIC_EXPERT_TASK_AUTO_PAUSE");
     assert.match(h.messages.at(-1).error, /登录/);
     assert.ok(requests.length >= 2 && requests.length <= 4);
@@ -197,11 +197,11 @@ test("resume rescans every page, retries failures and missing files, and preserv
   const { task } = await backend.begin();
   const pages = [[row("O1", "R1"), row("O2", "R2")], [row("O3", "R3"), row("O4", "R4", "08")]];
   const h = harness(pages, {
-    sendMessage: backend.send,
-    onMessage: message => { if (message.type === "PIC_EXPERT_MANIFEST_ROW") options.failInvoice = false; }
+    sendMessage: backend.send
   });
   try {
     await h.run(task.id);
+    options.failInvoice = false;
     const finished = await store.getTask();
     assert.equal(finished.status, "completed");
     assert.equal(finished.checkpoint.page, 2);
@@ -236,24 +236,24 @@ test("resume rescans every page, retries failures and missing files, and preserv
 test("changed checkpoint page stops before retrying earlier pages", async () => {
   const h = harness([[row("O1", "R1"), row("O2", "R2")], [row("O3", "R3")]]);
   await h.run("T1", { url: h.context.url, page: 2, total: 3, signature: "wrong", filters: [], size: 2 });
-  assert.equal(h.messages.some(m => m.type === "PIC_EXPERT_ROW_BEGIN"), false);
+  assert.equal(h.messages.some(m => m.type === "PIC_EXPERT_ORDER_CLAIM"), false);
   assert.match(h.messages.at(-1).error, /断点页订单集合/);
 });
 
-test('digital task saves all template images and skips a missing required field without partial download', async () => {
+test('digital task sends all selected images and skips a missing required field without partial download', async () => {
   for (const missing of [false,true]) {
-    const h=harness([[row('O1','R1')]], {assets: () => ({files:{'手机系统SN码照':'https://portal.test/sn','SN码和包装盒的二合一照':'https://portal.test/box','手机系统IMEI码照':'https://portal.test/imei','发票图片':'https://portal.test/invoice'},missing:missing?['必填图片缺失：手机系统IMEI码照']:[],notices:[]})});
+    const h=harness([[row('O1','R1')]], {assets: () => ({files:{'二合一照片':'https://portal.test/box','IMEI':'https://portal.test/imei','发票':'https://portal.test/invoice'},missing:missing?['必填图片缺失：IMEI']:[]})});
     await h.run('T1',null,{business:'digital'});
-    const result=h.messages.find(m=>m.type==='PIC_EXPERT_MANIFEST_ROW').row;
+    const result=h.messages.find(m=>m.type==='PIC_EXPERT_ORDER_SETTLE').row;
     assert.equal(result.result,missing?'跳过':'成功');
-    const download=h.messages.find(m=>m.type==='PIC_EXPERT_DOWNLOAD_PAIR');
-    if(missing){assert.equal(download,undefined);assert.match(result.reason,/手机系统IMEI码照/);}else assert.deepEqual(Object.keys(download.assets).sort(),['手机系统SN码照','SN码和包装盒的二合一照','手机系统IMEI码照','发票图片'].sort());
+    const download=h.messages.find(m=>m.type==='PIC_EXPERT_ORDER_SETTLE'&&m.assets);
+    if(missing){assert.equal(download,undefined);assert.match(result.reason,/IMEI/);}else assert.deepEqual(Object.keys(download.assets),['二合一照片','IMEI','发票']);
   }
 });
 test('a changed login token pauses before saving images', async () => {
   let token='original';
   const h=harness([[row('O1','R1')]],{token:()=>token,fetch:async()=>{token='other';return {ok:true,status:200,blob:async()=>new Blob([new Uint8Array([255,216,255])])};}});
   await h.run('T1',null,{business:'appliance'});
-  assert.equal(h.messages.some(m=>m.type==='PIC_EXPERT_DOWNLOAD_PAIR'),false);
+  assert.equal(h.messages.some(m=>m.type==='PIC_EXPERT_ORDER_SETTLE'),false);
   assert.equal(h.messages.at(-1).type,'PIC_EXPERT_TASK_AUTO_PAUSE');
 });

@@ -1,6 +1,6 @@
 // Order files and results share recovery rules; task control stays in background.js.
 globalThis.PIC_EXPERT_ORDER_DOWNLOADS = ({ db, downloads, getTask, update, assertTask, appendLog, waitForDownload }) => {
-  const { sanitizePathPart } = globalThis.PIC_EXPERT_CORE;
+  const { sanitizePathPart, MAX_ORDERS } = globalThis.PIC_EXPERT_CORE;
   const pairs = new Map(), recoveries = new Map();
   const upsertRow = async (task, changes, row) => {
     const previous = await db.getRow(task.id, row);
@@ -153,5 +153,28 @@ globalThis.PIC_EXPERT_ORDER_DOWNLOADS = ({ db, downloads, getTask, update, asser
     await upsertRow(task, changes, message.row);
     appendLog(changes, "订单结果", message.row.result + (message.row.reason ? "：" + message.row.reason : ""), message.row.result === "失败" ? "error" : "info");
   });
-  return { download: downloadPair, status: rowStatus, recordResult, reconcile };
+  // The page reports each order in two steps: claim it before reading, then settle it with its result and images.
+  const claim = async (message, sender) => {
+    const identity = message.identity;
+    if (!identity?.orderNo || !identity.referenceNo) throw new Error("订单身份不完整。");
+    if ((await rowStatus(message, sender)).done) return { done: true };
+    await update(message.taskId, sender, (t, c) => {
+      t.currentRows ||= [];
+      if (t.currentRows.some(row => row.orderNo === identity.orderNo && row.referenceNo === identity.referenceNo)) return;
+      if (t.currentRows.length >= MAX_ORDERS) throw new Error("同时处理的订单不能超过 " + MAX_ORDERS + " 笔。");
+      t.currentRows.push({ ...identity, page: t.page, ...(message.note ? { note: message.note } : {}) });
+      appendLog(c, "检查订单", "订单 " + identity.orderNo + "，参考号 " + identity.referenceNo);
+    });
+    return { done: false };
+  };
+  const settle = async (message, sender) => {
+    let row = message.row;
+    if (message.assets) {
+      try { await downloadPair({ taskId: message.taskId, orderNo: row.orderNo, referenceNo: row.referenceNo, assets: message.assets, note: message.note }, sender); }
+      catch (error) { row = { ...row, result: "失败", reason: [message.note, error.message].filter(Boolean).join("；") }; }
+    }
+    await recordResult({ taskId: message.taskId, row }, sender);
+    return { row };
+  };
+  return { claim, settle, reconcile };
 };
