@@ -99,7 +99,7 @@ const launch = async resume => {
   try {
     const tab = await sourceTab(resume);
     const injected = await chrome.scripting.executeScript({
-      target: { tabId: tab.id, allFrames: true }, files: ["core.js", "page-core.js", "site-api.js", "content.js"]
+      target: { tabId: tab.id, allFrames: true }, files: ["core.js", "page-core.js", "materials.js", "site-api.js", "content.js"]
     });
     const probes = await Promise.all(injected.map(async result => ({
       frameId: result.frameId,

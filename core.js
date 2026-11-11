@@ -2,15 +2,6 @@
   const INVALID_FILENAME = /[<>:"/\\|?*\u0000-\u001F]/g;
   // Orders processed at once; the page and the background both enforce it. Live test: no gain above 5.
   const MAX_ORDERS = 5;
-  const REQUIRED_KINDS = Object.freeze(["SN图片", "发票"]);
-  const fileKind = name => {
-    if (REQUIRED_KINDS.includes(name)) return name;
-    const numbered = String(name).match(/^(SN图片|发票)-([1-9]\d*)$/);
-    return numbered && Number.isSafeInteger(Number(numbered[2])) ? numbered[1] : null;
-  };
-  const assetNames = files => Object.keys(files || {}).sort((a, b) =>
-    REQUIRED_KINDS.indexOf(fileKind(a)) - REQUIRED_KINDS.indexOf(fileKind(b)) ||
-    Number(a.match(/-(\d+)$/)?.[1] || 0) - Number(b.match(/-(\d+)$/)?.[1] || 0));
   const cleanText = (value) => String(value ?? "").replace(/\s+/g, " ").trim();
 
   const sanitizePathPart = (value, fallback = "unknown") => {
@@ -52,7 +43,7 @@
   };
 
   const api = Object.freeze({ cleanText, sanitizePathPart, buildManifestCsv, makeTaskId, imageFormat,
-    MAX_ORDERS, REQUIRED_KINDS, fileKind, assetNames });
+    MAX_ORDERS });
   globalThis.PIC_EXPERT_CORE = api;
   if (typeof module !== "undefined" && module.exports) module.exports = api;
 })();

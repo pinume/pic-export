@@ -1,17 +1,18 @@
-importScripts("core.js", "store.js", "order-downloads.js");
+importScripts("core.js", "materials.js", "store.js", "order-downloads.js");
 const { buildManifestCsv, makeTaskId, cleanText, MAX_ORDERS } = globalThis.PIC_EXPERT_CORE;
 const db = globalThis.PIC_EXPERT_STORE;
+const MATERIALS = globalThis.PIC_EXPERT_MATERIALS, BUSINESSES = Object.keys(MATERIALS);
 const endings = new Map(), manifestExports = new Map();
 let stateQueue = Promise.resolve();
 const getTask = id => db.getTask(id);
 const businessOf = message => {
   const business = message.business || "appliance";
-  if (!["appliance", "digital"].includes(business)) throw new Error("导出功能无效。");
+  if (!BUSINESSES.includes(business)) throw new Error("导出功能无效。");
   return business;
 };
 const selectedTask = message => db.getBusinessTask(businessOf(message));
 const assertIdle = async () => {
-  for (const business of ["appliance", "digital"]) {
+  for (const business of BUSINESSES) {
     const task = await db.getBusinessTask(business);
     if (["running", "pausing", "stopping", "finalizing"].includes(task?.status)) throw new Error("已有任务运行；请先暂停或停止。");
   }
@@ -74,7 +75,7 @@ const startTask = message => mutate(async () => {
   const range = message.tradeDateRange;
   if (!Array.isArray(range) || range.length !== 2 || range.some(value => typeof value !== "string" || !/^\d{8}$/.test(value))) throw new Error("无法识别本次查询的交易日期区间。");
   const id = makeTaskId();
-  const task = { id, business, folderName: (business === "digital" ? "数码/" : "家电电脑/") + range[0] + "-" + range[1] + "_" + id, status: "running", tabId: message.tabId, frameId: message.frameId,
+  const task = { id, business, folderName: MATERIALS[business].folder + "/" + range[0] + "-" + range[1] + "_" + id, status: "running", tabId: message.tabId, frameId: message.frameId,
     startedAt: new Date().toISOString(), page: 1,
     scanned: 0, completed: 0, skipped: 0, failed: 0, currentRows: [], phase: "listing", listed: 0 };
   const changes = { logs: [] };
@@ -173,7 +174,7 @@ const autoPauseTask = async (taskId, sender, error, generation) => {
   }, false);
 };
 const sourceInterrupted = async (tabId, reason) => {
-  for (const business of ["appliance", "digital"]) {
+  for (const business of BUSINESSES) {
     const task = await db.getBusinessTask(business);
     if (task?.tabId === tabId && ["running", "pausing"].includes(task.status)) await autoPauseTask(task.id, {}, reason, task.generation || 0);
   }

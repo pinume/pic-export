@@ -2,6 +2,7 @@ const vm = require("node:vm");
 const fs = require("node:fs");
 const pageCore = require("../page-core.js");
 const fileCore = require("../core.js");
+const materials = require("../materials.js");
 
 function harness(pages, options = {}) {
   let listener, currentFilters = options.filters || { status: [], beginTransDate: "20261001", endTransDate: "20261004" }, pauseAfterRow = false;
@@ -23,7 +24,7 @@ function harness(pages, options = {}) {
         return { rows: pages[page] || [], total: pages.reduce((count, rows) => count + rows.length, 0) };
       },
       async assets(row) {
-        return options.assets?.(row) || { files: Object.fromEntries(fileCore.REQUIRED_KINDS.map(kind =>
+        return options.assets?.(row) || { files: Object.fromEntries(["SN图片", "发票"].map(kind =>
           [kind, "https://portal.test/" + row.transRef + "/" + kind])), missing: [] };
       }
     })
@@ -43,7 +44,7 @@ function harness(pages, options = {}) {
   } };
   const sandbox = {
     document: { querySelectorAll: () => [] }, Element: class {},
-    PIC_EXPERT_PAGE_CORE: pageCore, PIC_EXPERT_CORE: fileCore, PIC_EXPERT_SITE_API: siteApi,
+    PIC_EXPERT_PAGE_CORE: pageCore, PIC_EXPERT_CORE: fileCore, PIC_EXPERT_MATERIALS: materials, PIC_EXPERT_SITE_API: siteApi,
     chrome, location: { href: context.url, origin: "https://portal.test", hash: "#/auditOfTrade2026" },
     localStorage: { getItem: () => options.token ? options.token() : "session" }, console, URL, AbortController, AbortSignal, Blob,
     fetch: options.fetch || (async () => ({ ok: true, blob: async () => new Blob([new Uint8Array([0xff, 0xd8, 0xff])]) })),

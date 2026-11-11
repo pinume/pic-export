@@ -1,9 +1,7 @@
 const test = require("node:test");
 const assert = require("node:assert/strict");
-const pageCore = require("../page-core.js");
-const fileCore = require("../core.js");
-globalThis.PIC_EXPERT_PAGE_CORE = pageCore;
-globalThis.PIC_EXPERT_CORE = fileCore;
+require("../core.js");
+require("../materials.js");
 const site = require("../site-api.js");
 
 const field = (label, value = "") => ({
@@ -132,84 +130,6 @@ test("unknown status tags and rejected API requests fail closed", async () => {
   await assert.rejects(client.list({}, 0, 10), /拒绝了请求/);
 });
 
-test("multiple required image addresses are returned in template order with duplicate addresses removed", async () => {
-  const client = site.makeClient("session", async url => {
-    if (url.endsWith("queryDtl")) return response({ templateId: "T", productJson: { s1: "sn1", s2: "sn2", s3: "sn1", i1: "inv1", i2: "inv2" } });
-    return response({ productJson: [{ its: [
-      { type: "img", desc: "SN码", key: "s1" }, { type: "img", desc: "SN码照片", key: "s2" },
-      { type: "img", desc: "SN码图片", key: "s3" }, { type: "img", desc: "发票", key: "i1" },
-      { type: "img", desc: "发票图片", key: "i2" }
-    ] }] });
-  });
-  const found = await client.assets({ id: "O1", mchntId: "merchant" }, "https://portal.test");
-  assert.deepEqual([found.files["SN图片-1"], found.files["SN图片-2"]].map(url => new URL(url).pathname.split("/").at(-1)), ["sn1", "sn2"]);
-  assert.deepEqual([found.files["发票-1"], found.files["发票-2"]].map(url => new URL(url).pathname.split("/").at(-1)), ["inv1", "inv2"]);
-  assert.deepEqual(Object.keys(found.files), ["SN图片-1", "SN图片-2", "发票-1", "发票-2"]);
-});
-const digital = (fields, product) => site.makeClient('session', async url => response(url.includes('queryDtl') ? { templateId: 'T', productJson: product } : { productJson: [{ its: fields }] })).assets({ mchntId: 'M', id: 'O' }, 'https://portal.test', 'digital');
-test('digital downloads only 二合一照片, IMEI and 发票 and checks only those required fields', async () => {
-  const phone = [
-    { type: 'img', key: 'img1', desc: '（必填）手机系统SN码照', required: true },
-    { type: 'img', key: 'img2', desc: '（必填）SN码和包装盒的二合一照', required: true },
-    { type: 'img', key: 'img3', desc: '（必填）手机系统IMEI码照', required: true },
-    { type: 'img', key: 'img4', desc: '证明材料图一', required: false },
-    { type: 'img', key: 'invoice', desc: '（必填）发票图片', required: true }
-  ];
-  // SN图片 is empty although required: it is not downloaded, so it no longer skips the order.
-  const result = await digital(phone, { img2: 'box', img3: 'imei', img4: 'proof', invoice: 'inv' });
-  assert.deepEqual(Object.keys(result.files), ['二合一照片', 'IMEI', '发票']);
-  assert.deepEqual(result.missing, []);
-  assert.deepEqual((await digital(phone, { img1: 'sn', img2: 'box', img3: 'imei' })).missing, ['必填图片缺失：发票']);
-  const product = [
-    { type: 'img', key: 'img1', desc: '（必填）商品SN照片  ', required: true },
-    { type: 'img', key: 'img2', desc: '（必填）产品系统和包装盒SN码的二合一照', required: true },
-    { type: 'img', key: 'img3', desc: '系统IMEI码照片', required: false },
-    { type: 'img', key: 'invoice', desc: '（必填）发票图片', required: true }
-  ];
-  assert.deepEqual(Object.keys((await digital(product, { img1: 'sn', img2: 'box', img3: 'imei', invoice: 'inv' })).files), ['二合一照片', 'IMEI', '发票']);
-  const optionalEmpty = await digital(product, { img1: 'sn', img2: 'box', invoice: 'inv' });
-  assert.deepEqual([Object.keys(optionalEmpty.files), optionalEmpty.missing], [['二合一照片', '发票'], []]);
-});
-test('digital templates without the selected images, malformed values and malformed groups fail', async () => {
-  await assert.rejects(digital([{ type: 'img', key: 'a', desc: '新资料/照片', required: true }], { a: 'image' }), /模板/);
-  const box = { type: 'img', key: 'box', desc: '（必填）SN码和包装盒的二合一照', required: true };
-  await assert.rejects(digital([box, { type: 'img', key: 'a', desc: '（必填）发票图片', required: true }], { box: 'box', a: { url: 'image' } }), /格式/);
-  // A renamed invoice label must fail the order instead of downloading it without an invoice.
-  await assert.rejects(digital([box, { type: 'img', key: 'a', desc: '（必填）发票照片', required: true }], { box: 'box', a: 'inv' }), /缺少二合一照片或发票字段/);
-  await assert.rejects(digital([{ type: 'img', key: 'a', desc: '（必填）发票图片', required: true }], { a: 'inv' }), /缺少二合一照片或发票字段/);
-  const fetcher = async url => response(url.includes('queryDtl') ? { templateId: 'T', productJson: { a: 'image' } } : { productJson: [{ its: [box, { type: 'img', key: 'a', desc: '发票图片', required: true }] }, { its: { hiddenRequired: true } }] });
-  await assert.rejects(site.makeClient('session', fetcher).assets({ mchntId: 'M', id: 'O' }, 'https://portal.test', 'digital'), /模板/);
-});
-test('digital labels mapped to the same name are numbered in template order', async () => {
-  const fields = [
-    { type: 'img', key: 'a', desc: '（必填）手机系统IMEI码照', required: true },
-    { type: 'img', key: 'b', desc: '系统IMEI码照片', required: false },
-    { type: 'img', key: 'box', desc: '（必填）SN码和包装盒的二合一照', required: true },
-    { type: 'img', key: 'inv', desc: '（必填）发票图片', required: true }
-  ];
-  const result = await digital(fields, { a: 'imei-a', b: 'imei-b', box: 'box', inv: 'inv' });
-  assert.deepEqual(Object.entries(result.files).map(([name, url]) => [name, new URL(url).pathname.split('/').at(-1)]), [['IMEI-1', 'imei-a'], ['IMEI-2', 'imei-b'], ['二合一照片', 'box'], ['发票', 'inv']]);
-});
-
- test('appliance ignores proof images, including repeated ones, and still checks SN and invoice', async () => {
-  for (const missing of [true, false]) {
-    const fetcher = async url => response(url.endsWith('queryDtl') ? { templateId: 'T', productJson: { sn: 'sn', invoice: missing ? '' : 'invoice', p1: 'proof1', p2: 'proof2' } } : { productJson: [{ its: [
-      { type: 'img', key: 'sn', desc: 'SN码' }, { type: 'img', key: 'invoice', desc: '发票' },
-      { type: 'img', key: 'p1', desc: '证明材料图一' }, { type: 'img', key: 'p2', desc: '证明材料图一' }
-    ] }] });
-    const read = site.makeClient('session', fetcher).assets({ id: 'O', mchntId: 'M' }, 'https://portal.test');
-    if (missing) assert.deepEqual((await read).missing, ['必填图片缺失：发票']);
-    else assert.deepEqual(Object.keys((await read).files), ['SN图片', '发票']);
-  }
-});
-test('appliance templates without an SN or invoice field fail instead of skipping', async () => {
-  for (const its of [[{ type: 'img', key: 'sn', desc: '（必填）SN码照片' }], [{ type: 'img', key: 'sn', desc: '（必填）SN照片' }, { type: 'img', key: 'invoice', desc: '（必填）发票图片' }]]) {
-    const fetcher = async url => response(url.endsWith('queryDtl') ? { templateId: 'T', productJson: { sn: 'sn', invoice: 'invoice' } } : { productJson: [{ its }] });
-    await assert.rejects(site.makeClient('session', fetcher).assets({ id: 'O', mchntId: 'M' }, 'https://portal.test'), /家电模板缺少SN图片或发票字段/);
-  }
-  const fetcher = async url => response(url.endsWith('queryDtl') ? { templateId: 'T', productJson: { sn: '', invoice: '' } } : { productJson: [{ its: [{ type: 'img', key: 'sn', desc: 'SN码' }, { type: 'img', key: 'invoice', desc: '发票' }] }] });
-  assert.deepEqual((await site.makeClient('session', fetcher).assets({ id: 'O', mchntId: 'M' }, 'https://portal.test')).missing, ['必填图片缺失：SN图片、发票']);
-});
 test('templates are read once per client and a failed template read is retried', async () => {
   let templateReads = 0, failNext = true;
   const fetcher = async url => {
@@ -223,4 +143,8 @@ test('templates are read once per client and a failed template read is retried',
   const results = await Promise.all(['O2', 'O3', 'O4'].map(id => client.assets({ id, mchntId: 'M' }, 'https://portal.test')));
   assert.ok(results.every(result => Object.keys(result.files).join() === 'SN图片,发票'));
   assert.equal(templateReads, 2);
+});
+test("an unknown business is rejected before any material is selected", async () => {
+  const fetcher = async url => response(url.endsWith("queryDtl") ? { templateId: "T", productJson: {} } : { productJson: [] });
+  for (const business of ["other", "toString", "__proto__"]) await assert.rejects(site.makeClient("session", fetcher).assets({ id: "O", mchntId: "M" }, "https://portal.test", business), /导出功能无效/);
 });

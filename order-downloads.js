@@ -1,6 +1,6 @@
 // Order files and results share recovery rules; task control stays in background.js.
 globalThis.PIC_EXPERT_ORDER_DOWNLOADS = ({ db, downloads, getTask, update, assertTask, appendLog, waitForDownload }) => {
-  const { sanitizePathPart, REQUIRED_KINDS, fileKind, assetNames } = globalThis.PIC_EXPERT_CORE;
+  const { sanitizePathPart } = globalThis.PIC_EXPERT_CORE;
   const pairs = new Map(), recoveries = new Map();
   const upsertRow = async (task, changes, row) => {
     const previous = await db.getRow(task.id, row);
@@ -14,13 +14,7 @@ globalThis.PIC_EXPERT_ORDER_DOWNLOADS = ({ db, downloads, getTask, update, asser
   };
   const validateAssets = (assets, business) => {
     const formats = { ".jpg": "image/jpeg", ".png": "image/png", ".webp": "image/webp", ".gif": "image/gif", ".bmp": "image/bmp" };
-    const kinds = business === "digital" ? Object.keys(assets || {}) : assetNames(assets);
-    if (business === "digital") {
-      if (!kinds.length || kinds.some(name => sanitizePathPart(name) !== name || name === "." || name === "..")) throw new Error("数码图片文件名无效。");
-    } else {
-      if (!assets || REQUIRED_KINDS.some(kind => !kinds.some(name => fileKind(name) === kind))) throw new Error("必须提供 SN图片和发票图片。");
-      if (kinds.some(kind => !fileKind(kind))) throw new Error("图片类型不受支持。");
-    }
+    const kinds = globalThis.PIC_EXPERT_MATERIALS[business].names(assets);
     for (const kind of kinds) {
       const asset = assets[kind];
       if (!asset || !formats[asset.extension] || !asset.url?.startsWith("data:" + formats[asset.extension] + ";base64,")) throw new Error(kind + "图片格式未验证。");
@@ -55,7 +49,7 @@ globalThis.PIC_EXPERT_ORDER_DOWNLOADS = ({ db, downloads, getTask, update, asser
     const { taskId, orderNo, referenceNo, assets } = message;
     const task = await getTask(taskId);
     assertTask(task, taskId, sender);
-    const kinds = validateAssets(assets, task.business);
+    const kinds = validateAssets(assets, task.business || "appliance");
     if (!orderNo || !/^[A-Za-z0-9_-]+$/.test(referenceNo || "")) throw new Error("订单身份不完整。");
     const key = taskId + "::" + referenceNo;
     await update(taskId, sender, async (_task, changes) => {
