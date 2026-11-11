@@ -1,6 +1,10 @@
 (() => {
   const API = "/uisportal/api/uis-tradein-server/";
   const IMAGE = API + "img/tradein/download/";
+  const DIGITAL_NAMES = new Map([
+    ["手机系统IMEI码照", "IMEI"], ["系统IMEI码照片", "IMEI"], ["SN码和包装盒的二合一照", "二合一照片"],
+    ["产品系统和包装盒SN码的二合一照", "二合一照片"], ["发票图片", "发票"]
+  ]);
   const STATUS_CODES = new Map([
     ["待提交/暂存", ["01"]], ["待审核/待商家审核", ["07"]],
     ["待审核/待核销", ["20", "03"]], ["待审核/待发票核验", ["02"]],
@@ -148,12 +152,16 @@
         if (!product || typeof product !== "object" || !Array.isArray(groups)) throw new Error("订单图片字段无法识别。");
         if (business === "digital") {
           if (Array.isArray(product) || groups.some(group => !Array.isArray(group?.its) || group.its.some(item => !item || typeof item.type !== "string"))) throw new Error("数码图片模板分组无法安全识别。");
-          const fields = groups.flatMap(group => group.its).filter(item => item.type === "img");
+          const label = item => DIGITAL_NAMES.get(cleanText(item.desc || item.name).replace(/^[（(](?:必填|选填)[）)]\s*/, ""));
+          // Only the mapped image types are downloaded or checked; other template images are ignored.
+          const fields = groups.flatMap(group => group.its).filter(item => item.type === "img" && label(item));
           if (!fields.length || fields.some(item => !item.key || typeof item.required !== "boolean")) throw new Error("数码图片模板无法安全识别。");
           const keys = new Set(), used = new Set(), files = Object.create(null), missing = [];
-          const names = fields.map(item => globalThis.PIC_EXPERT_CORE.sanitizePathPart(cleanText(item.desc || item.name).replace(/^[（(](?:必填|选填)[）)]\s*/, ""), ""));
+          const names = fields.map(label);
+          // A renamed site label would otherwise drop the field silently and still report success.
+          if (!names.includes("二合一照片") || !names.includes("发票")) throw new Error("数码模板缺少二合一照片或发票字段。");
           for (const [index, item] of fields.entries()) {
-            if (keys.has(item.key) || !names[index]) throw new Error("数码图片字段身份或名称不唯一。");
+            if (keys.has(item.key)) throw new Error("数码图片字段身份或名称不唯一。");
             keys.add(item.key);
             const value = product[item.key];
             if (value != null && typeof value !== "string") throw new Error("数码图片字段格式无法识别。");

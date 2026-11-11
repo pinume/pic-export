@@ -147,39 +147,50 @@ test("multiple required image addresses are returned in template order with dupl
   assert.deepEqual([found.files["发票-1"], found.files["发票-2"]].map(url => new URL(url).pathname.split("/").at(-1)), ["inv1", "inv2"]);
   assert.deepEqual(Object.keys(found.files), ["SN码-1", "SN码-2", "发票-1", "发票-2"]);
 });
-test('digital templates preserve distinct names, optional fields and required missing names', async () => {
-  const fetcher=async url=>response(url.includes('queryDtl')?{templateId:'T',productJson:{img1:'sn',img2:'box',proof:'proof'}}:{productJson:[{its:[{type:'img',key:'img1',desc:'（必填）手机系统SN码照',required:true},{type:'img',key:'img2',desc:'（必填）SN码和包装盒的二合一照',required:true},{type:'img',key:'img3',desc:'系统IMEI码照片',required:false},{type:'img',key:'invoice',desc:'（必填）发票图片',required:true},{type:'img',key:'proof',desc:'证明材料图三',required:false}]}]});
-  const result=await site.makeClient('session',fetcher).assets({mchntId:'M',id:'O'},'https://portal.test','digital');
-  assert.deepEqual(Object.keys(result.files),['手机系统SN码照','SN码和包装盒的二合一照','证明材料图三']);
-  assert.deepEqual(result.missing,['必填图片缺失：发票图片']);
+const digital = (fields, product) => site.makeClient('session', async url => response(url.includes('queryDtl') ? { templateId: 'T', productJson: product } : { productJson: [{ its: fields }] })).assets({ mchntId: 'M', id: 'O' }, 'https://portal.test', 'digital');
+test('digital downloads only 二合一照片, IMEI and 发票 and checks only those required fields', async () => {
+  const phone = [
+    { type: 'img', key: 'img1', desc: '（必填）手机系统SN码照', required: true },
+    { type: 'img', key: 'img2', desc: '（必填）SN码和包装盒的二合一照', required: true },
+    { type: 'img', key: 'img3', desc: '（必填）手机系统IMEI码照', required: true },
+    { type: 'img', key: 'img4', desc: '证明材料图一', required: false },
+    { type: 'img', key: 'invoice', desc: '（必填）发票图片', required: true }
+  ];
+  // SN码 is empty although required: it is not downloaded, so it no longer skips the order.
+  const result = await digital(phone, { img2: 'box', img3: 'imei', img4: 'proof', invoice: 'inv' });
+  assert.deepEqual(Object.keys(result.files), ['二合一照片', 'IMEI', '发票']);
+  assert.deepEqual(result.missing, []);
   assert.deepEqual(result.notices, []);
+  assert.deepEqual((await digital(phone, { img1: 'sn', img2: 'box', img3: 'imei' })).missing, ['必填图片缺失：发票']);
+  const product = [
+    { type: 'img', key: 'img1', desc: '（必填）商品SN照片  ', required: true },
+    { type: 'img', key: 'img2', desc: '（必填）产品系统和包装盒SN码的二合一照', required: true },
+    { type: 'img', key: 'img3', desc: '系统IMEI码照片', required: false },
+    { type: 'img', key: 'invoice', desc: '（必填）发票图片', required: true }
+  ];
+  assert.deepEqual(Object.keys((await digital(product, { img1: 'sn', img2: 'box', img3: 'imei', invoice: 'inv' })).files), ['二合一照片', 'IMEI', '发票']);
+  const optionalEmpty = await digital(product, { img1: 'sn', img2: 'box', invoice: 'inv' });
+  assert.deepEqual([Object.keys(optionalEmpty.files), optionalEmpty.missing], [['二合一照片', '发票'], []]);
 });
-test('digital unknown labels are saved safely and malformed values fail', async () => {
-  for(const value of ['image', {url:'image'}]){
-    const fetcher=async url=>response(url.includes('queryDtl')?{templateId:'T',productJson:{img:value}}:{productJson:[{its:[{type:'img',key:'img',desc:'新资料/照片',required:false}]}]});
-    const read=site.makeClient('session',fetcher).assets({mchntId:'M',id:'O'},'https://portal.test','digital');
-    if(typeof value==='string')assert.deepEqual(Object.keys((await read).files),['新资料_照片']);else await assert.rejects(read,/格式/);
-  }
+test('digital templates without the selected images, malformed values and malformed groups fail', async () => {
+  await assert.rejects(digital([{ type: 'img', key: 'a', desc: '新资料/照片', required: true }], { a: 'image' }), /模板/);
+  const box = { type: 'img', key: 'box', desc: '（必填）SN码和包装盒的二合一照', required: true };
+  await assert.rejects(digital([box, { type: 'img', key: 'a', desc: '（必填）发票图片', required: true }], { box: 'box', a: { url: 'image' } }), /格式/);
+  // A renamed invoice label must fail the order instead of downloading it without an invoice.
+  await assert.rejects(digital([box, { type: 'img', key: 'a', desc: '（必填）发票照片', required: true }], { box: 'box', a: 'inv' }), /缺少二合一照片或发票字段/);
+  await assert.rejects(digital([{ type: 'img', key: 'a', desc: '（必填）发票图片', required: true }], { a: 'inv' }), /缺少二合一照片或发票字段/);
+  const fetcher = async url => response(url.includes('queryDtl') ? { templateId: 'T', productJson: { a: 'image' } } : { productJson: [{ its: [box, { type: 'img', key: 'a', desc: '发票图片', required: true }] }, { its: { hiddenRequired: true } }] });
+  await assert.rejects(site.makeClient('session', fetcher).assets({ mchntId: 'M', id: 'O' }, 'https://portal.test', 'digital'), /模板/);
 });
-test('digital malformed groups fail and special names remain actual image fields', async () => {
-  for(const groups of [[{its:[{type:'img',key:'a',desc:'__proto__',required:true}]}],[{its:[{type:'img',key:'a',desc:'照片',required:true}]},{its:{hiddenRequired:true}}]]){
-    const fetcher=async url=>response(url.includes('queryDtl')?{templateId:'T',productJson:{a:'image'}}:{productJson:groups});
-    const result=site.makeClient('session',fetcher).assets({mchntId:'M',id:'O'},'https://portal.test','digital');
-    if(groups.length===1)assert.deepEqual(Object.keys((await result).files),['__proto__']);else await assert.rejects(result,/模板/);
-  }
-});
-
-test('digital duplicate labels avoid natural numbered names without losing fields', async () => {
-  const names = ['照片', '照片', '照片-1', '照片-2', '照片-3'];
-  const fields = names.map((desc, i) => ({ type: 'img', key: 'img' + i, desc, required: true }));
-  const product = Object.fromEntries(fields.map((field, i) => [field.key, 'image' + i]));
-  const fetcher = async url => response(url.endsWith('queryDtl') ? { templateId: 'T', productJson: product } : { productJson: [{ its: fields }] });
-  const read = () => site.makeClient('fixture', fetcher).assets({ id: 'O', mchntId: 'M' }, 'https://portal.test', 'digital');
-  const first = await read();
-  assert.equal(Object.keys(first.files).length, fields.length);
-  assert.deepEqual(Object.keys(first.files), Object.keys((await read()).files));
-  assert.deepEqual(Object.values(first.files).map(url => new URL(url).pathname.split('/').at(-1)), fields.map((_, i) => 'image' + i));
-  for (const name of names.slice(2)) assert.ok(Object.hasOwn(first.files, name));
+test('digital labels mapped to the same name are numbered in template order', async () => {
+  const fields = [
+    { type: 'img', key: 'a', desc: '（必填）手机系统IMEI码照', required: true },
+    { type: 'img', key: 'b', desc: '系统IMEI码照片', required: false },
+    { type: 'img', key: 'box', desc: '（必填）SN码和包装盒的二合一照', required: true },
+    { type: 'img', key: 'inv', desc: '（必填）发票图片', required: true }
+  ];
+  const result = await digital(fields, { a: 'imei-a', b: 'imei-b', box: 'box', inv: 'inv' });
+  assert.deepEqual(Object.entries(result.files).map(([name, url]) => [name, new URL(url).pathname.split('/').at(-1)]), [['IMEI-1', 'imei-a'], ['IMEI-2', 'imei-b'], ['二合一照片', 'box'], ['发票', 'inv']]);
 });
 
  test('appliance missing required images takes precedence over ambiguous proof', async () => {
