@@ -1,5 +1,5 @@
 importScripts("core.js", "store.js", "order-downloads.js");
-const { buildManifestCsv, makeTaskId, cleanText } = globalThis.PIC_EXPERT_CORE;
+const { buildManifestCsv, makeTaskId, cleanText, MAX_ORDERS } = globalThis.PIC_EXPERT_CORE;
 const db = globalThis.PIC_EXPERT_STORE;
 const endings = new Map(), manifestExports = new Map();
 let stateQueue = Promise.resolve();
@@ -244,7 +244,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
           if (!message.identity?.orderNo || !message.identity.referenceNo) throw new Error("订单身份不完整。");
           t.currentRows ||= [];
           if (t.currentRows.some(row => row.orderNo === message.identity.orderNo && row.referenceNo === message.identity.referenceNo)) return;
-          if (t.currentRows.length >= 3) throw new Error("同时处理的订单不能超过三笔。");
+          if (t.currentRows.length >= MAX_ORDERS) throw new Error("同时处理的订单不能超过 " + MAX_ORDERS + " 笔。");
           t.currentRows.push({ ...message.identity, page: t.page, ...(message.note ? { note: message.note } : {}) });
           appendLog(c, "检查订单", "订单 " + message.identity.orderNo + "，参考号 " + message.identity.referenceNo);
         }) };

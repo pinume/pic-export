@@ -221,7 +221,7 @@
           query: context.filters, size: context.size
         } });
         let cursor = 0;
-        const workers = Array.from({ length: Math.min(3, result.rows.length) }, async () => {
+        const workers = Array.from({ length: Math.min(FILES.MAX_ORDERS, result.rows.length) }, async () => {
           while (!pauseRequested && !stopped && !failure && cursor < result.rows.length) {
             const row = result.rows[cursor++], id = identity(row);
             try {

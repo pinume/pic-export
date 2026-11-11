@@ -1,5 +1,7 @@
 (() => {
   const INVALID_FILENAME = /[<>:"/\\|?*\u0000-\u001F]/g;
+  // Orders processed at once; the page and the background both enforce it. Live test: no gain above 5.
+  const MAX_ORDERS = 5;
   const REQUIRED_KINDS = Object.freeze(["SN图片", "发票"]);
   const fileKind = name => {
     if (REQUIRED_KINDS.includes(name)) return name;
@@ -50,7 +52,7 @@
   };
 
   const api = Object.freeze({ cleanText, sanitizePathPart, buildManifestCsv, makeTaskId, imageFormat,
-    REQUIRED_KINDS, fileKind, assetNames });
+    MAX_ORDERS, REQUIRED_KINDS, fileKind, assetNames });
   globalThis.PIC_EXPERT_CORE = api;
   if (typeof module !== "undefined" && module.exports) module.exports = api;
 })();

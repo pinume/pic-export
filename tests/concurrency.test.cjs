@@ -4,6 +4,10 @@ require("fake-indexeddb/auto");
 const { TaskStore } = require("../store.js");
 const { harness: background, assets } = require("./background-harness.cjs");
 const { harness: content, row } = require("./content-harness.cjs");
+const { MAX_ORDERS } = require("../core.js");
+// One order more than the limit, so the last order must wait for a free slot.
+const extra = "R" + (MAX_ORDERS + 1);
+const rows = count => Array.from({ length: count }, (_, i) => row("O" + (i + 1), "R" + (i + 1)));
 let sequence = 0;
 const tick = () => new Promise(setImmediate);
 async function until(predicate) {
@@ -327,25 +331,25 @@ test("force pause aborts three detail requests through the real site API", async
   assert.equal(f.backend.calls.length, 0);
 });
 
-test("verified total precedes downloads; three orders and six reads overlap without crossing a page", async t => {
-  const gate = imageGate();
-  const f = await flow(t, [[row("O1", "R1"), row("O2", "R2"), row("O3", "R3"), row("O4", "R4")], [row("O5", "R5")]],
+test("verified total precedes downloads; the order limit and two reads per order overlap without crossing a page", async t => {
+  const gate = imageGate(), total = MAX_ORDERS + 2;
+  const f = await flow(t, [rows(MAX_ORDERS + 1), [row("O" + total, "R" + total)]],
     { downloads: { holdPair: true }, content: { fetch: gate.fetch } });
   const running = f.page.run(f.task.id);
-  await until(() => gate.live() === 6);
+  await until(() => gate.live() === MAX_ORDERS * 2);
   const active = await f.store.getTask();
-  assert.equal(active.total, 5);
-  assert.equal(active.currentRows.length, 3);
+  assert.equal(active.total, total);
+  assert.equal(active.currentRows.length, MAX_ORDERS);
   assert.equal(f.backend.calls.length, 0);
   assert.equal(f.page.calls.length, 2);
-  assert.equal((await f.backend.send({ type: "PIC_EXPERT_CHECKPOINT", taskId: f.task.id, checkpoint: { page: 2, total: 5 } })).ok, false);
+  assert.equal((await f.backend.send({ type: "PIC_EXPERT_CHECKPOINT", taskId: f.task.id, checkpoint: { page: 2, total } })).ok, false);
   gate.release("R2");
   await finishOrder(f.backend, "R2");
-  await until(() => [...gate.pending.keys()].filter(url => url.includes("/R4/")).length === 2);
-  assert.equal((await f.store.getTask()).currentRows.length, 3);
+  await until(() => [...gate.pending.keys()].filter(url => url.includes("/" + extra + "/")).length === 2);
+  assert.equal((await f.store.getTask()).currentRows.length, MAX_ORDERS);
   assert.equal(f.page.calls.length, 2);
-  gate.release("R4");
-  await finishOrder(f.backend, "R4");
+  gate.release(extra);
+  await finishOrder(f.backend, extra);
   await until(async () => (await f.store.getTask()).completed === 2);
   assert.equal(f.page.calls.length, 2);
   f.downloadOptions.holdPair = false;
@@ -353,13 +357,13 @@ test("verified total precedes downloads; three orders and six reads overlap with
   await running;
   const finished = await f.store.getTask();
   assert.equal(finished.status, "completed");
-  assert.deepEqual([finished.total, finished.scanned, finished.completed, finished.failed, finished.currentRows.length], [5, 5, 5, 0, 0]);
-  assert.equal(gate.peak(), 6);
+  assert.deepEqual([finished.total, finished.scanned, finished.completed, finished.failed, finished.currentRows.length], [total, total, total, 0, 0]);
+  assert.equal(gate.peak(), MAX_ORDERS * 2);
   assert.deepEqual(f.page.calls.map(call => call.page), [0, 1]);
-  assert.equal((await f.store.rows(f.task.id)).length, 5);
+  assert.equal((await f.store.rows(f.task.id)).length, total);
   const csvCalls = f.backend.calls.filter(call => call.filename.endsWith(".csv"));
   assert.equal(csvCalls.length, 1);
-  assert.equal(decodeURIComponent(csvCalls[0].url).split("\r\n").length, 6);
+  assert.equal(decodeURIComponent(csvCalls[0].url).split("\r\n").length, total + 1);
   assert.ok(f.backend.calls.every(call => call.filename.startsWith("pic-expert/" + f.task.folderName + "/")));
   assert.equal(f.backend.handlers.size, 0);
 });
@@ -379,34 +383,33 @@ test("a failed order rolls back its own images while other orders succeed", asyn
   assert.ok(f.backend.removed.every(id => f.backend.items.get(id).filename.includes("/R2/")));
 });
 
-test("graceful pause drains three orders, keeps its checkpoint, and resumes without duplicate files", async t => {
+test("graceful pause drains in-flight orders, keeps its checkpoint, and resumes without duplicate files", async t => {
   const gate = imageGate();
-  const f = await flow(t, [[row("O1", "R1"), row("O2", "R2"), row("O3", "R3"), row("O4", "R4")]],
-    { content: { fetch: gate.fetch } });
+  const f = await flow(t, [rows(MAX_ORDERS + 1)], { content: { fetch: gate.fetch } });
   const running = f.page.run(f.task.id);
-  await until(() => gate.live() === 6);
+  await until(() => gate.live() === MAX_ORDERS * 2);
   await f.backend.send({ type: "PIC_EXPERT_TASK_PAUSE" }, {});
   assert.equal((await f.store.getTask()).status, "pausing");
   assert.equal((await f.backend.begin()).ok, false);
   gate.releaseAll();
   await running;
   const paused = await f.store.getTask();
-  assert.deepEqual([paused.status, paused.completed, paused.currentRows.length, paused.checkpoint.page], ["paused", 3, 0, 1]);
-  assert.equal(f.backend.calls.length, 6);
-  assert.ok(!gate.starts.some(url => url.includes("/R4/")));
+  assert.deepEqual([paused.status, paused.completed, paused.currentRows.length, paused.checkpoint.page], ["paused", MAX_ORDERS, 0, 1]);
+  assert.equal(f.backend.calls.length, MAX_ORDERS * 2);
+  assert.ok(!gate.starts.some(url => url.includes("/" + extra + "/")));
   const resumed = await f.backend.send({ type: "PIC_EXPERT_TASK_RESUME", tabId: 7, frameId: 4 }, {});
   await f.page.run(f.task.id, resumed.task.checkpoint);
   const finalTask = await f.store.getTask();
-  assert.deepEqual([finalTask.scanned, finalTask.completed, finalTask.failed], [4, 4, 0]);
-  assert.equal(f.backend.calls.length, 9);
+  assert.deepEqual([finalTask.scanned, finalTask.completed, finalTask.failed], [MAX_ORDERS + 1, MAX_ORDERS + 1, 0]);
+  // Two images per order plus the manifest.
+  assert.equal(f.backend.calls.length, (MAX_ORDERS + 1) * 2 + 1);
 });
 
-for (const action of ["force-pause", "stop"]) test(`${action} cancels three mixed in-flight orders before terminal state`, async t => {
+for (const action of ["force-pause", "stop"]) test(`${action} cancels mixed in-flight orders before terminal state`, async t => {
   const gate = imageGate();
-  const f = await flow(t, [[row("O1", "R1"), row("O2", "R2"), row("O3", "R3"), row("O4", "R4")]],
-    { downloads: { holdPair: true }, content: { fetch: gate.fetch } });
+  const f = await flow(t, [rows(MAX_ORDERS + 1)], { downloads: { holdPair: true }, content: { fetch: gate.fetch } });
   const running = f.page.run(f.task.id);
-  await until(() => gate.live() === 6);
+  await until(() => gate.live() === MAX_ORDERS * 2);
   gate.release("R1");
   await until(() => f.backend.items.size === 1);
   if (action === "force-pause") await f.backend.send({ type: "PIC_EXPERT_TASK_PAUSE" }, {});
@@ -414,9 +417,9 @@ for (const action of ["force-pause", "stop"]) test(`${action} cancels three mixe
   await running;
   const task = await f.store.getTask();
   assert.equal(task.status, action === "stop" ? "failed" : "paused");
-  assert.deepEqual([task.scanned, task.completed, task.failed, task.currentRows.length], [3, 0, 3, 0]);
+  assert.deepEqual([task.scanned, task.completed, task.failed, task.currentRows.length], [MAX_ORDERS, 0, MAX_ORDERS, 0]);
   assert.equal(gate.live(), 0);
-  assert.equal(gate.starts.length, 6);
+  assert.equal(gate.starts.length, MAX_ORDERS * 2);
   assert.deepEqual((await f.store.getPair(task.id, "R1")).files, {});
   assert.equal(f.backend.items.get(1).exists, false);
   assert.equal(f.backend.calls.filter(call => call.filename.endsWith(".csv")).length, action === "stop" ? 1 : 0);
@@ -426,7 +429,7 @@ for (const action of ["force-pause", "stop"]) test(`${action} cancels three mixe
     const resumed = await f.backend.send({ type: "PIC_EXPERT_TASK_RESUME", tabId: 7, frameId: 4 }, {});
     await f.page.run(task.id, resumed.task.checkpoint);
     const finished = await f.store.getTask();
-    assert.deepEqual([finished.scanned, finished.completed, finished.failed], [4, 4, 0]);
+    assert.deepEqual([finished.scanned, finished.completed, finished.failed], [MAX_ORDERS + 1, MAX_ORDERS + 1, 0]);
   }
 });
 
@@ -434,7 +437,7 @@ for (const fault of ["authentication", "authentication-during-pause", "query-cha
   const gate = imageGate();
   let releaseAuth;
   const authReady = new Promise(resolve => { releaseAuth = resolve; });
-  const f = await flow(t, [[row("O1", "R1"), row("O2", "R2"), row("O3", "R3"), row("O4", "R4")]], {
+  const f = await flow(t, [rows(MAX_ORDERS + 1)], {
     content: { fetch: async (url, options) => {
       if (fault.startsWith("authentication") && url.includes("/R2/")) {
         if (fault === "authentication-during-pause") await authReady;
@@ -445,12 +448,13 @@ for (const fault of ["authentication", "authentication-during-pause", "query-cha
   });
   const running = f.page.run(f.task.id);
   if (fault === "authentication-during-pause") {
-    await until(() => gate.live() === 4);
+    // R2's reads wait outside the gate; every other in-flight order holds two reads.
+    await until(() => gate.live() === (MAX_ORDERS - 1) * 2);
     await f.backend.send({ type: "PIC_EXPERT_TASK_PAUSE" }, {});
     releaseAuth();
   }
   if (fault === "query-change") {
-    await until(() => gate.live() === 6);
+    await until(() => gate.live() === MAX_ORDERS * 2);
     f.page.changeFilters({ status: ["01"] }); gate.release("R1");
   }
   await running;
@@ -459,7 +463,7 @@ for (const fault of ["authentication", "authentication-during-pause", "query-cha
   assert.match(task.error, fault.startsWith("authentication") ? /登录/ : /查询条件/);
   assert.equal(task.currentRows.length, 0);
   assert.equal(gate.live(), 0);
-  assert.ok(!gate.starts.some(url => url.includes("/R4/")));
+  assert.ok(!gate.starts.some(url => url.includes("/" + extra + "/")));
   assert.equal(f.backend.calls.filter(call => !call.filename.endsWith(".csv")).length, 0);
 });
 
