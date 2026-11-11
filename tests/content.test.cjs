@@ -76,14 +76,14 @@ test("material modification is a CSV note on success, missing required images an
     const h = harness([[{ ...row("O1", "R1", "H03"), statusDesc: "材料修改" }]], {
       assets: () => {
         if (mode === "failure") throw new Error("读取详情失败");
-        return { files: { "SN码": "https://portal.test/sn", "发票": "https://portal.test/invoice" },
-          missing: mode === "missing" ? ["SN码或发票图片缺失"] : [], notices: [] };
+        return { files: { "SN图片": "https://portal.test/sn", "发票": "https://portal.test/invoice" },
+          missing: mode === "missing" ? ["必填图片缺失：发票"] : [] };
       }
     });
     await h.run("T1");
     const result = h.messages.find(message => message.type === "PIC_EXPERT_MANIFEST_ROW").row;
     assert.equal(result.result, { success: "成功", missing: "跳过", failure: "失败" }[mode]);
-    assert.equal(result.reason, { success: "材料修改", missing: "材料修改；SN码或发票图片缺失", failure: "材料修改；读取详情失败" }[mode]);
+    assert.equal(result.reason, { success: "材料修改", missing: "材料修改；必填图片缺失：发票", failure: "材料修改；读取详情失败" }[mode]);
   }
 });
 
@@ -170,7 +170,7 @@ test("image authentication errors stop before the next order even when another i
     const h = harness([[row("O1", "R1"), row("O2", "R2")]], {
       fetch: async url => {
         requests.push(url);
-        return { ok: false, status: url.endsWith("SN码") ? 404 : status };
+        return { ok: false, status: url.endsWith("SN图片") ? 404 : status };
       }
     });
     await h.run("T1");
@@ -208,7 +208,7 @@ test("resume rescans every page, retries failures and missing files, and preserv
     assert.equal(finished.failed, 1);
     const goodPair = await store.getPair(task.id, "R3");
     const lostPair = await store.getPair(task.id, "R2");
-    backend.items.get(lostPair.files["SN码"].downloadId).exists = false;
+    backend.items.get(lostPair.files["SN图片"].downloadId).exists = false;
     const before = backend.calls.length;
     const resumed = await backend.send({ type: "PIC_EXPERT_TASK_RESUME", tabId: 7, frameId: 4 }, {});
     assert.equal(resumed.ok, true);

@@ -24,8 +24,7 @@ function harness(pages, options = {}) {
       },
       async assets(row) {
         return options.assets?.(row) || { files: Object.fromEntries(fileCore.REQUIRED_KINDS.map(kind =>
-          [kind, "https://portal.test/" + row.transRef + "/" + kind])), missing: [],
-          notices: fileCore.PROOF_KINDS.map(kind => kind + "为空，跳过") };
+          [kind, "https://portal.test/" + row.transRef + "/" + kind])), missing: [] };
       }
     })
   };

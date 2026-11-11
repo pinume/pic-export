@@ -4,7 +4,7 @@ const path = require("node:path");
 const core = require("../core.js");
 const { MemoryStore } = require("./memory-store.cjs");
 const sender = { tab: { id: 7 }, frameId: 4 };
-const assets = { "SN码": { extension: ".jpg", url: "data:image/jpeg;base64,/9j/" },
+const assets = { "SN图片": { extension: ".jpg", url: "data:image/jpeg;base64,/9j/" },
   "发票": { extension: ".png", url: "data:image/png;base64,iVBORw==" } };
 function harness(options = {}, initial = null) {
   let listener, stored = initial;

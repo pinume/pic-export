@@ -136,6 +136,13 @@
       error.auth = true;
       throw error;
     }
+    // Templates are shared by many orders; one read per template and client. Failed reads are retried.
+    const templates = new Map();
+    const template = id => {
+      if (!templates.has(id)) templates.set(id, request("portal/yjhx/v3/queryTemplateInfo/" + encodeURIComponent(id), {}, token, fetcher)
+        .catch(error => { templates.delete(id); throw error; }));
+      return templates.get(id);
+    };
     return {
       async list(filters, current, size) {
         const data = await request("portal/yjhx/v3/queryList", { ...filters, current, size }, token, fetcher);
@@ -146,7 +153,7 @@
         if (!row?.mchntId || !row?.id) throw new Error("订单详情身份字段缺失。");
         const detail = await request("portal/yjhx/v3/queryDtl", { mchntId: row.mchntId, uuid: row.id }, token, fetcher);
         if (!detail?.templateId) throw new Error("订单详情接口未返回模板编号。");
-        const templateData = await request("portal/yjhx/v3/queryTemplateInfo/" + encodeURIComponent(detail.templateId), {}, token, fetcher);
+        const templateData = await template(detail.templateId);
         const product = parseJson(detail.productJson);
         const groups = parseJson(templateData?.productJson);
         if (!product || typeof product !== "object" || !Array.isArray(groups)) throw new Error("订单图片字段无法识别。");
@@ -156,7 +163,7 @@
           // Only the mapped image types are downloaded or checked; other template images are ignored.
           const fields = groups.flatMap(group => group.its).filter(item => item.type === "img" && label(item));
           if (!fields.length || fields.some(item => !item.key || typeof item.required !== "boolean")) throw new Error("数码图片模板无法安全识别。");
-          const keys = new Set(), used = new Set(), files = Object.create(null), missing = [];
+          const keys = new Set(), numbers = {}, files = Object.create(null), missing = [];
           const names = fields.map(label);
           // A renamed site label would otherwise drop the field silently and still report success.
           if (!names.includes("二合一照片") || !names.includes("发票")) throw new Error("数码模板缺少二合一照片或发票字段。");
@@ -166,37 +173,33 @@
             const value = product[item.key];
             if (value != null && typeof value !== "string") throw new Error("数码图片字段格式无法识别。");
             let name = names[index];
-            if (names.filter(n => n === name).length > 1) {
-              let suffix = 1;
-              do { name = names[index].slice(0, 110) + "-" + suffix++; }
-              while (names.includes(name) || used.has(name));
-            }
-            used.add(name);
+            if (names.filter(n => n === name).length > 1) name += "-" + (numbers[name] = (numbers[name] || 0) + 1);
             if (!cleanText(value)) { if (item.required) missing.push(name); continue; }
             files[name] = imageUrl(cleanText(value), origin, token);
           }
-          return { files, missing: missing.length ? ["必填图片缺失：" + missing.join("、")] : [], notices: [] };
+          return { files, missing: missing.length ? ["必填图片缺失：" + missing.join("、")] : [] };
         }
-        const found = {};
+        const found = {}, fieldKinds = new Set();
         for (const item of groups.flatMap(group => Array.isArray(group?.its) ? group.its : [])) {
           if (item?.type !== "img") continue;
           const kind = globalThis.PIC_EXPERT_PAGE_CORE.assetKind(item.desc || item.name);
           if (!kind || !item.key) continue;
+          fieldKinds.add(kind);
           const value = cleanText(product[item.key]);
           if (!value) continue;
           const url = imageUrl(value, origin, token);
           (found[kind] ||= new Set()).add(url);
         }
-        const { ASSET_KINDS, REQUIRED_KINDS, PROOF_KINDS } = globalThis.PIC_EXPERT_CORE;
-        const missing = REQUIRED_KINDS.some(kind => !found[kind]?.size) ? ["SN码或发票图片缺失"] : [];
-        if (!missing.length) {
-          for (const kind of PROOF_KINDS) if (found[kind]?.size > 1) throw new Error(kind + "图片不唯一，已停止该订单下载。");
-        }
-        const files = Object.fromEntries(ASSET_KINDS.flatMap(kind => {
+        const { REQUIRED_KINDS } = globalThis.PIC_EXPERT_CORE;
+        // A renamed site label must fail the order instead of reporting the image as missing.
+        if (REQUIRED_KINDS.some(kind => !fieldKinds.has(kind))) throw new Error("家电模板缺少SN图片或发票字段。");
+        const absent = REQUIRED_KINDS.filter(kind => !found[kind]?.size);
+        const missing = absent.length ? ["必填图片缺失：" + absent.join("、")] : [];
+        const files = Object.fromEntries(REQUIRED_KINDS.flatMap(kind => {
           const urls = [...(found[kind] || [])];
           return urls.map((url, i) => [urls.length > 1 ? kind + "-" + (i + 1) : kind, url]);
         }));
-        return { files, missing, notices: PROOF_KINDS.filter(kind => !found[kind]?.size).map(kind => kind + "为空，跳过") };
+        return { files, missing };
       }
     };
   };

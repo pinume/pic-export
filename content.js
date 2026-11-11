@@ -96,7 +96,6 @@
       const failure = results.find(result => result.status === "rejected" && result.reason.auth) ||
         results.find(result => result.status === "rejected");
       if (failure) throw failure.reason;
-      for (const notice of states.notices) await log("证明材料", notice);
       ensureActive();
       await checkedSend({ type: "PIC_EXPERT_DOWNLOAD_PAIR", taskId, ...id, assets: prepared, note });
       return { ...id, result: "成功", reason: note };

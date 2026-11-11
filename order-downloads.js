@@ -18,7 +18,7 @@ globalThis.PIC_EXPERT_ORDER_DOWNLOADS = ({ db, downloads, getTask, update, asser
     if (business === "digital") {
       if (!kinds.length || kinds.some(name => sanitizePathPart(name) !== name || name === "." || name === "..")) throw new Error("数码图片文件名无效。");
     } else {
-      if (!assets || REQUIRED_KINDS.some(kind => !kinds.some(name => fileKind(name) === kind))) throw new Error("必须提供 SN码和发票图片。");
+      if (!assets || REQUIRED_KINDS.some(kind => !kinds.some(name => fileKind(name) === kind))) throw new Error("必须提供 SN图片和发票图片。");
       if (kinds.some(kind => !fileKind(kind))) throw new Error("图片类型不受支持。");
     }
     for (const kind of kinds) {

@@ -8,11 +8,10 @@ test("material modification markers are excluded", () => {
 });
 
 test("portal template labels map to supported image kinds", () => {
-  assert.equal(page.assetKind("（必填）SN码照片"), "SN码");
+  assert.equal(page.assetKind("（必填）SN码照片"), "SN图片");
   assert.equal(page.assetKind("（必填）发票图片"), "发票");
-  assert.equal(page.assetKind("证明材料图一"), "证明材料图一");
-  assert.equal(page.assetKind("（选填）证明材料图2"), "证明材料图二");
-  assert.equal(page.assetKind("证明材料图四"), null);
+  assert.equal(page.assetKind("证明材料图一"), null);
+  assert.equal(page.assetKind("（选填）证明材料图2"), null);
 });
 
 test("frame choice rejects missing or ambiguous queried order pages", () => {

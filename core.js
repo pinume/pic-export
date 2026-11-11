@@ -1,15 +1,13 @@
 (() => {
   const INVALID_FILENAME = /[<>:"/\\|?*\u0000-\u001F]/g;
-  const REQUIRED_KINDS = Object.freeze(["SN码", "发票"]);
-  const PROOF_KINDS = Object.freeze(["证明材料图一", "证明材料图二", "证明材料图三"]);
-  const ASSET_KINDS = Object.freeze([...REQUIRED_KINDS, ...PROOF_KINDS]);
+  const REQUIRED_KINDS = Object.freeze(["SN图片", "发票"]);
   const fileKind = name => {
-    if (ASSET_KINDS.includes(name)) return name;
-    const numbered = String(name).match(/^(SN码|发票)-([1-9]\d*)$/);
+    if (REQUIRED_KINDS.includes(name)) return name;
+    const numbered = String(name).match(/^(SN图片|发票)-([1-9]\d*)$/);
     return numbered && Number.isSafeInteger(Number(numbered[2])) ? numbered[1] : null;
   };
   const assetNames = files => Object.keys(files || {}).sort((a, b) =>
-    ASSET_KINDS.indexOf(fileKind(a)) - ASSET_KINDS.indexOf(fileKind(b)) ||
+    REQUIRED_KINDS.indexOf(fileKind(a)) - REQUIRED_KINDS.indexOf(fileKind(b)) ||
     Number(a.match(/-(\d+)$/)?.[1] || 0) - Number(b.match(/-(\d+)$/)?.[1] || 0));
   const cleanText = (value) => String(value ?? "").replace(/\s+/g, " ").trim();
 
@@ -52,7 +50,7 @@
   };
 
   const api = Object.freeze({ cleanText, sanitizePathPart, buildManifestCsv, makeTaskId, imageFormat,
-    REQUIRED_KINDS, PROOF_KINDS, ASSET_KINDS, fileKind, assetNames });
+    REQUIRED_KINDS, fileKind, assetNames });
   globalThis.PIC_EXPERT_CORE = api;
   if (typeof module !== "undefined" && module.exports) module.exports = api;
 })();

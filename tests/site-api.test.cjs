@@ -118,11 +118,10 @@ test("detail and template responses map labeled image fields to download URLs", 
     "/uisportal/api/uis-tradein-server/portal/yjhx/v3/queryDtl",
     "/uisportal/api/uis-tradein-server/portal/yjhx/v3/queryTemplateInfo/template-1"
   ]);
-  assert.match(assets.files["SN码"], /img\/tradein\/download\/sn-id\?userPortalToken=secret/);
+  assert.match(assets.files["SN图片"], /img\/tradein\/download\/sn-id\?userPortalToken=secret/);
   assert.match(assets.files["发票"], /img\/tradein\/download\/invoice-id\?userPortalToken=secret/);
-  assert.match(assets.files["证明材料图三"], /img\/tradein\/download\/proof-id\?userPortalToken=secret/);
+  assert.deepEqual(Object.keys(assets.files), ["SN图片", "发票"]);
   assert.deepEqual(assets.missing, []);
-  assert.deepEqual(assets.notices, ["证明材料图一为空，跳过", "证明材料图二为空，跳过"]);
 });
 
 test("unknown status tags and rejected API requests fail closed", async () => {
@@ -143,9 +142,9 @@ test("multiple required image addresses are returned in template order with dupl
     ] }] });
   });
   const found = await client.assets({ id: "O1", mchntId: "merchant" }, "https://portal.test");
-  assert.deepEqual([found.files["SN码-1"], found.files["SN码-2"]].map(url => new URL(url).pathname.split("/").at(-1)), ["sn1", "sn2"]);
+  assert.deepEqual([found.files["SN图片-1"], found.files["SN图片-2"]].map(url => new URL(url).pathname.split("/").at(-1)), ["sn1", "sn2"]);
   assert.deepEqual([found.files["发票-1"], found.files["发票-2"]].map(url => new URL(url).pathname.split("/").at(-1)), ["inv1", "inv2"]);
-  assert.deepEqual(Object.keys(found.files), ["SN码-1", "SN码-2", "发票-1", "发票-2"]);
+  assert.deepEqual(Object.keys(found.files), ["SN图片-1", "SN图片-2", "发票-1", "发票-2"]);
 });
 const digital = (fields, product) => site.makeClient('session', async url => response(url.includes('queryDtl') ? { templateId: 'T', productJson: product } : { productJson: [{ its: fields }] })).assets({ mchntId: 'M', id: 'O' }, 'https://portal.test', 'digital');
 test('digital downloads only 二合一照片, IMEI and 发票 and checks only those required fields', async () => {
@@ -156,11 +155,10 @@ test('digital downloads only 二合一照片, IMEI and 发票 and checks only th
     { type: 'img', key: 'img4', desc: '证明材料图一', required: false },
     { type: 'img', key: 'invoice', desc: '（必填）发票图片', required: true }
   ];
-  // SN码 is empty although required: it is not downloaded, so it no longer skips the order.
+  // SN图片 is empty although required: it is not downloaded, so it no longer skips the order.
   const result = await digital(phone, { img2: 'box', img3: 'imei', img4: 'proof', invoice: 'inv' });
   assert.deepEqual(Object.keys(result.files), ['二合一照片', 'IMEI', '发票']);
   assert.deepEqual(result.missing, []);
-  assert.deepEqual(result.notices, []);
   assert.deepEqual((await digital(phone, { img1: 'sn', img2: 'box', img3: 'imei' })).missing, ['必填图片缺失：发票']);
   const product = [
     { type: 'img', key: 'img1', desc: '（必填）商品SN照片  ', required: true },
@@ -193,14 +191,36 @@ test('digital labels mapped to the same name are numbered in template order', as
   assert.deepEqual(Object.entries(result.files).map(([name, url]) => [name, new URL(url).pathname.split('/').at(-1)]), [['IMEI-1', 'imei-a'], ['IMEI-2', 'imei-b'], ['二合一照片', 'box'], ['发票', 'inv']]);
 });
 
- test('appliance missing required images takes precedence over ambiguous proof', async () => {
+ test('appliance ignores proof images, including repeated ones, and still checks SN and invoice', async () => {
   for (const missing of [true, false]) {
     const fetcher = async url => response(url.endsWith('queryDtl') ? { templateId: 'T', productJson: { sn: 'sn', invoice: missing ? '' : 'invoice', p1: 'proof1', p2: 'proof2' } } : { productJson: [{ its: [
       { type: 'img', key: 'sn', desc: 'SN码' }, { type: 'img', key: 'invoice', desc: '发票' },
       { type: 'img', key: 'p1', desc: '证明材料图一' }, { type: 'img', key: 'p2', desc: '证明材料图一' }
     ] }] });
     const read = site.makeClient('session', fetcher).assets({ id: 'O', mchntId: 'M' }, 'https://portal.test');
-    if (missing) assert.deepEqual((await read).missing, ['SN码或发票图片缺失']);
-    else await assert.rejects(read, /证明材料图一图片不唯一，已停止该订单下载。/);
+    if (missing) assert.deepEqual((await read).missing, ['必填图片缺失：发票']);
+    else assert.deepEqual(Object.keys((await read).files), ['SN图片', '发票']);
   }
+});
+test('appliance templates without an SN or invoice field fail instead of skipping', async () => {
+  for (const its of [[{ type: 'img', key: 'sn', desc: '（必填）SN码照片' }], [{ type: 'img', key: 'sn', desc: '（必填）SN照片' }, { type: 'img', key: 'invoice', desc: '（必填）发票图片' }]]) {
+    const fetcher = async url => response(url.endsWith('queryDtl') ? { templateId: 'T', productJson: { sn: 'sn', invoice: 'invoice' } } : { productJson: [{ its }] });
+    await assert.rejects(site.makeClient('session', fetcher).assets({ id: 'O', mchntId: 'M' }, 'https://portal.test'), /家电模板缺少SN图片或发票字段/);
+  }
+  const fetcher = async url => response(url.endsWith('queryDtl') ? { templateId: 'T', productJson: { sn: '', invoice: '' } } : { productJson: [{ its: [{ type: 'img', key: 'sn', desc: 'SN码' }, { type: 'img', key: 'invoice', desc: '发票' }] }] });
+  assert.deepEqual((await site.makeClient('session', fetcher).assets({ id: 'O', mchntId: 'M' }, 'https://portal.test')).missing, ['必填图片缺失：SN图片、发票']);
+});
+test('templates are read once per client and a failed template read is retried', async () => {
+  let templateReads = 0, failNext = true;
+  const fetcher = async url => {
+    if (url.endsWith('queryDtl')) return response({ templateId: 'T', productJson: { sn: 'sn', invoice: 'invoice' } });
+    templateReads++;
+    if (failNext) { failNext = false; return { ok: false, status: 500, headers: { get: () => 'application/json' } }; }
+    return response({ productJson: [{ its: [{ type: 'img', key: 'sn', desc: 'SN码' }, { type: 'img', key: 'invoice', desc: '发票' }] }] });
+  };
+  const client = site.makeClient('session', fetcher);
+  await assert.rejects(client.assets({ id: 'O1', mchntId: 'M' }, 'https://portal.test'), /500/);
+  const results = await Promise.all(['O2', 'O3', 'O4'].map(id => client.assets({ id, mchntId: 'M' }, 'https://portal.test')));
+  assert.ok(results.every(result => Object.keys(result.files).join() === 'SN图片,发票'));
+  assert.equal(templateReads, 2);
 });

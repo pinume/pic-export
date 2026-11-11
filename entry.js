@@ -28,7 +28,7 @@ const detectMerchant = async () => {
     const statusEl = document.querySelector("#" + prefix + "-status");
     statusEl.textContent = task ? labels[task.status] || task.status : "未开始";
     if (statusEl?.dataset) statusEl.dataset.status = task?.status || "";
-    document.querySelector("#" + prefix + "-progress").textContent = task ? "成功 " + task.completed + " · 跳过 " + task.skipped + " · 失败 " + task.failed : business === "digital" ? "按订单类型下载数码图片资料" : "SN码、发票及证明材料";
+    document.querySelector("#" + prefix + "-progress").textContent = task ? "成功 " + task.completed + " · 跳过 " + task.skipped + " · 失败 " + task.failed : business === "digital" ? "按订单类型下载数码图片资料" : "SN图片和发票";
   } catch (error) {
     if (!document.querySelector("#merchant-number").textContent) document.querySelector("#merchant-name").textContent = "未识别";
     if (detectedBusiness) {

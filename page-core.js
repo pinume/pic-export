@@ -3,10 +3,8 @@
 
   const assetKind = (label) => {
     const text = String(label ?? "").replace(/\s+/g, "").replace(/^[（(](?:必填|选填)[）)]/, "").replace(/[:：]$/, "");
-    if (/^(?:S\/?N码(?:照片|图片)?|序列号(?:照片|图片)?)$/i.test(text)) return "SN码";
+    if (/^(?:S\/?N码(?:照片|图片)?|序列号(?:照片|图片)?)$/i.test(text)) return "SN图片";
     if (/^发票(?:照片|图片)?$/.test(text)) return "发票";
-    const proof = text.match(/^证明材料图([一二三123])$/);
-    if (proof) return "证明材料图" + ({1:"一",2:"二",3:"三"}[proof[1]] || proof[1]);
     return null;
   };
   const chooseFrame = (results) => {

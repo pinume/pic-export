@@ -53,7 +53,7 @@ async function flow(t, pages, options = {}) {
   return { backend, page, store, task, downloadOptions };
 }
 async function finishOrder(backend, reference) {
-  for (const kind of ["SN码", "发票"]) {
+  for (const kind of ["SN图片", "发票"]) {
     let item;
     await until(() => {
       item = [...backend.items.values()].find(item => item.filename.includes("/" + reference + "/" + kind));
@@ -120,7 +120,7 @@ test("expired login resumes after a page reload with a fresh token, persisted li
   assert.ok(requests.slice(0, 2).every(request => request.url.endsWith("queryList")));
   const complete = await f.store.getPair(f.task.id, "R1");
   const missing = await f.store.getPair(f.task.id, "R2");
-  f.backend.items.get(missing.files["SN码"].downloadId).exists = false;
+  f.backend.items.get(missing.files["SN图片"].downloadId).exists = false;
   const before = requests.length;
   expired = false; token = "new-session";
   const reopenedStore = new TaskStore(f.store.storage, f.store.databaseName);
@@ -136,12 +136,14 @@ test("expired login resumes after a page reload with a fresh token, persisted li
   assert.deepEqual([finished.status, finished.scanned, finished.completed, finished.skipped, finished.failed], ["completed", 4, 3, 1, 0]);
   assert.equal(finished.folderName, paused.folderName);
   assert.deepEqual(await reopenedStore.getPair(f.task.id, "R1"), complete);
-  assert.equal(backend.calls.length, 6);
+  assert.equal(backend.calls.length, 5);
   assert.ok(backend.calls.every(call => !call.filename.includes("/R1/") && !call.filename.includes("/R3/")));
-  assert.ok(backend.calls.some(call => call.filename.endsWith("/R4/证明材料图三.jpg")));
+  // The template's proof image has a value for O4 but is not downloaded.
+  assert.ok(backend.calls.some(call => call.filename.endsWith("/R4/SN图片.jpg")));
+  assert.ok(backend.calls.every(call => !call.filename.includes("证明材料")));
   assert.deepEqual(requests.slice(before).filter(request => request.url.endsWith("queryDtl")).map(request => request.body.uuid), ["id-O2", "id-O4"]);
   const csv = decodeURIComponent(backend.calls.at(-1).url.split(",").slice(1).join(","));
-  assert.equal(csv, "\uFEFF订单号,参考号,处理结果,原因\r\nO1,R1,成功,\r\nO2,R2,成功,\r\nO3,R3,跳过,SN码或发票图片缺失\r\nO4,R4,成功,");
+  assert.equal(csv, "\uFEFF订单号,参考号,处理结果,原因\r\nO1,R1,成功,\r\nO2,R2,成功,\r\nO3,R3,跳过,必填图片缺失：发票\r\nO4,R4,成功,");
 });
 
 test("login expiry before the first list page preserves a resumable query and completes after login", async t => {
@@ -192,7 +194,7 @@ test("three overlapping orders keep every numbered image in its own reference fo
   const gate = imageGate();
   const rows = [row("O1", "R1", "04"), { ...row("O2", "R2", "08"), statusDesc: "待审核", statusText: "材料修改" }, row("O3", "R3", "S03")];
   const f = await flow(t, [rows], { content: { fetch: gate.fetch, assets: order => ({
-    files: Object.fromEntries([["SN码-1", "s1"], ["SN码-2", "s2"], ["发票-1", "i1"], ["发票-2", "i2"], ["发票-3", "i3"]].map(([name, path]) => [name, "https://portal.test/" + order.transRef + "/" + path])), missing: [], notices: []
+    files: Object.fromEntries([["SN图片-1", "s1"], ["SN图片-2", "s2"], ["发票-1", "i1"], ["发票-2", "i2"], ["发票-3", "i3"]].map(([name, path]) => [name, "https://portal.test/" + order.transRef + "/" + path])), missing: [], notices: []
   }) } });
   const running = f.page.run(f.task.id);
   await until(() => gate.live() === 6);
@@ -207,7 +209,7 @@ test("three overlapping orders keep every numbered image in its own reference fo
   assert.equal(gate.peak(), 6);
   for (const reference of ["R1", "R2", "R3"]) {
     const calls = f.backend.calls.filter(call => call.filename.includes("/" + reference + "/"));
-    const names = ["SN码-1.jpg", "SN码-2.jpg", "发票-1.jpg", "发票-2.jpg", "发票-3.jpg"];
+    const names = ["SN图片-1.jpg", "SN图片-2.jpg", "发票-1.jpg", "发票-2.jpg", "发票-3.jpg"];
     assert.deepEqual(calls.map(call => call.filename.split("/").at(-1)), names);
     assert.ok(calls.every(call => call.filename.startsWith("pic-expert/" + task.folderName + "/" + reference + "/")));
     assert.deepEqual(calls.map(call => Buffer.from(call.url.split(",")[1], "base64").subarray(3).toString()),
@@ -227,7 +229,7 @@ test("failure of a later numbered image rolls back every file of only that order
   const f = await flow(t, [[{ ...row("O1", "R1"), statusDesc: "材料修改" }, row("O2", "R2")]], {
     downloads: { failFilename: "/R1/发票-2.jpg" },
     content: { assets: order => ({
-      files: Object.fromEntries([["SN码-1", "s1"], ["SN码-2", "s2"], ["发票-1", "i1"], ["发票-2", "i2"]].map(([name, path]) => [name, "https://portal.test/" + order.transRef + "/" + path])), missing: [], notices: []
+      files: Object.fromEntries([["SN图片-1", "s1"], ["SN图片-2", "s2"], ["发票-1", "i1"], ["发票-2", "i2"]].map(([name, path]) => [name, "https://portal.test/" + order.transRef + "/" + path])), missing: [], notices: []
     }) }
   });
   await f.page.run(f.task.id);
@@ -255,7 +257,7 @@ for (const action of ["PAUSE", "STOP"]) for (const reportedFailure of [false, tr
     const identity = { orderNo: "O1", referenceNo: "R1" };
     assert.ok((await f.backend.send({ type: "PIC_EXPERT_ROW_BEGIN", taskId: f.task.id, identity })).ok);
     assert.ok((await f.backend.send({ type: "PIC_EXPERT_DOWNLOAD_PAIR", taskId: f.task.id, ...identity,
-      assets: { ...assets, "证明材料图三": assets["发票"] } })).ok);
+      assets: { ...assets, "发票-2": assets["发票"] } })).ok);
     // Files complete before the page confirms its final result.
     assert.equal((await f.store.getPair(f.task.id, "R1")).status, "complete");
     assert.equal(await f.store.getRow(f.task.id, identity), null);
@@ -279,9 +281,9 @@ for (const action of ["PAUSE", "STOP"]) for (const reportedFailure of [false, tr
     assert.equal(result.reason, reportedFailure ? "页面中断" : "");
     const directory = "pic-expert/" + task.folderName + "/R1/";
     assert.deepEqual(f.backend.calls.map(call => call.filename),
-      [directory + "SN码.jpg", directory + "发票.png", directory + "证明材料图三.png"]);
+      [directory + "SN图片.jpg", directory + "发票.png", directory + "发票-2.png"]);
     assert.deepEqual(Object.values((await store.getPair(task.id, "R1")).files).map(file => file.filename),
-      [directory + "SN码.jpg", directory + "发票.png", directory + "证明材料图三.png"]);
+      [directory + "SN图片.jpg", directory + "发票.png", directory + "发票-2.png"]);
     assert.ok(f.backend.calls.every((_call, index) => f.backend.items.get(index + 1).exists));
     assert.equal(restarted.removed.length, 0);
 
