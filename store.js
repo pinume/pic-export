@@ -155,16 +155,15 @@
     async logPage(taskId, after = 0, limit = 5000) {
       const db = await this.open();
       return new Promise((resolve, reject) => {
-        const logs = [];
-        let next = after;
-        const request = db.transaction("logs").objectStore("logs").index("sequence")
-          .openCursor(IDBKeyRange.bound([taskId, after], [taskId, Infinity], true));
-        request.onsuccess = () => {
-          const cursor = request.result;
-          if (!cursor || logs.length === limit) { resolve({ logs, next, more: Boolean(cursor) }); return; }
-          logs.push(cursor.value.value); next = cursor.primaryKey; cursor.continue();
+        // One extra entry tells whether another page follows.
+        const tx = db.transaction("logs"), index = tx.objectStore("logs").index("sequence");
+        const range = IDBKeyRange.bound([taskId, after], [taskId, Infinity], true);
+        const values = index.getAll(range, limit + 1), keys = index.getAllKeys(range, limit + 1);
+        tx.oncomplete = () => {
+          const logs = values.result.slice(0, limit).map(record => record.value);
+          resolve({ logs, next: logs.length ? keys.result[logs.length - 1] : after, more: values.result.length > limit });
         };
-        request.onerror = () => reject(request.error);
+        tx.onabort = () => reject(tx.error || new Error("日志读取失败。"));
       });
     }
   }

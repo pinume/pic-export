@@ -2,13 +2,20 @@ const vm = require("node:vm");
 const fs = require("node:fs");
 const path = require("node:path");
 const core = require("../core.js");
-const { MemoryStore } = require("./memory-store.cjs");
+require("fake-indexeddb/auto");
+const { TaskStore } = require("../store.js");
+let sequence = 0;
 const sender = { tab: { id: 7 }, frameId: 4 };
 const assets = { "SN图片": { extension: ".jpg", url: "data:image/jpeg;base64,/9j/" },
   "发票": { extension: ".png", url: "data:image/png;base64,iVBORw==" } };
 function harness(options = {}, initial = null) {
+  // Legacy initial tasks enter through chrome.storage, exactly as TaskStore migrates them in the extension.
   let listener, stored = initial;
-  const store = options.store || new MemoryStore(initial);
+  const storage = {
+    get: async () => ({ picExpertTask: structuredClone(stored) }),
+    set: async value => { stored = structuredClone(value.picExpertTask); }
+  };
+  const store = options.store || new TaskStore(storage, "background-" + process.pid + "-" + sequence++);
   const calls = [], removed = [], items = options.items || new Map(
     Object.values(initial?.downloads || {}).flatMap(pair => Object.values(pair.files).map(file =>
       [file.downloadId, { id: file.downloadId, state: "complete", exists: true }]))
@@ -19,10 +26,7 @@ function harness(options = {}, initial = null) {
     for (const handler of handlers) handler({id,state:{current:state}});
   };
   const chrome = {
-    storage: { local: {
-      get: async () => ({ picExpertTask: structuredClone(stored) }),
-      set: async value => { stored = structuredClone(value.picExpertTask); }
-    } },
+    storage: { local: storage },
     runtime: { getURL: file => "chrome-extension://test-extension/" + file, onMessage: { addListener: f => { listener = f; } } },
     tabs: { onUpdated: { addListener() {} }, onRemoved: { addListener() {} },
       sendMessage: async (_tab, message) => options.pageMessage ? options.pageMessage(message) : ({ ok: true, running: Boolean(options.livePage) }) },
@@ -70,6 +74,11 @@ function harness(options = {}, initial = null) {
   // Settles order O1/R1 as a success with the default images; the response row says whether saving worked.
   const pair = (taskId, extra = {}, source) => send({ type: "PIC_EXPERT_ORDER_SETTLE", taskId, note: "",
     row: { orderNo: "O1", referenceNo: "R1", result: "成功", reason: "" }, assets, ...extra }, source);
-  return { send, begin, pair, calls, removed, items, store, notify, handlers, task: () => store.snapshot() };
+  return { send, begin, pair, calls, removed, items, store, notify, handlers, task: async () => {
+    // The active task with its rows, pairs and latest logs, read back through the store's own interface.
+    const task = await store.getTask();
+    return task && { ...task, manifestRows: await store.rows(task.id),
+      downloads: Object.fromEntries((await store.pairs(task.id)).map(pair => [pair.referenceNo, pair])), logs: await store.logs(task.id, 500) };
+  } };
 }
 module.exports = { harness, assets };

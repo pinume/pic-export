@@ -23,9 +23,9 @@ test('manual business selection resumes without an account identity', async () =
   await h.send({type:'PIC_EXPERT_TASK_PAUSE'},{});
   const result=await h.send({type:'PIC_EXPERT_TASK_RESUME',tabId:8,frameId:0},{});
   assert.equal(result.ok,true);
-  assert.equal(h.task().status,'running');
-  assert.equal(h.task().tabId,8);
-  assert.equal(h.task().accountId,undefined);
+  assert.equal((await h.task()).status,'running');
+  assert.equal((await h.task()).tabId,8);
+  assert.equal((await h.task()).accountId,undefined);
 });
 test('digital download keeps the selected names and rolls back an incomplete order', async () => {
   const h=harness({failFilename:'IMEI.jpg'});
