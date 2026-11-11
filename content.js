@@ -112,10 +112,99 @@
     if (result.rows.some(row => !identity(row).orderNo || !identity(row).referenceNo)) throw new Error("订单列表缺少订单号或参考号，已停止。");
     return result;
   };
+  // Throws when the login token or the page query differs from the start of the task; returns the current context.
+  const queryGuard = initial => {
+    const token = globalThis.localStorage?.getItem("userPortalVerifyToken");
+    const query = JSON.stringify(initial.filters), visiblePage = JSON.stringify(initial.visiblePage);
+    return size => {
+      if (globalThis.localStorage?.getItem("userPortalVerifyToken") !== token) {
+        const error = new Error("登录状态已变化，请重新查询后继续。"); error.auth = true; throw error;
+      }
+      const current = pageContext();
+      if (JSON.stringify(current.filters) !== query || current.url !== initial.url ||
+        current.size !== initial.size || JSON.stringify(current.visiblePage) !== visiblePage) {
+        const error = new Error("任务运行期间查询条件或页面发生变化。");
+        error.fatal = true;
+        throw error;
+      }
+      return { ...current, size };
+    };
+  };
+  // Reads the complete order list through the site, checks it against the page, the checkpoint and the saved list,
+  // and saves it in the background. Throws before any order is processed when the list cannot be trusted.
+  const readCompleteList = async (taskId, checkpoint, initial, unchanged) => {
+    let listSize = checkpoint ? checkpoint.size || initial.size : initial.listSize || initial.size;
+    const readAll = Boolean(initial.listSize) && listSize >= initial.listSize;
+    let context = { ...initial, size: listSize };
+    const ensureActive = () => {
+      requestController.signal.throwIfAborted();
+      context = unchanged(listSize);
+    };
+    if (checkpoint) {
+      if (context.url !== checkpoint.url || (!initial.listSize && checkpoint.size && initial.size !== checkpoint.size) ||
+        (checkpoint.query && JSON.stringify(context.filters) !== JSON.stringify(checkpoint.query)) ||
+        (!checkpoint.query && JSON.stringify(legacyFilters()) !== JSON.stringify(checkpoint.filters))) {
+        throw new Error("当前查询与断点不同，请手动恢复原查询；扩展不会调整日期或点击查询。");
+      }
+      if (!Number.isInteger(checkpoint.page) || checkpoint.page < 1 || (checkpoint.total !== null && !Number.isInteger(checkpoint.total))) {
+        throw new Error("旧版断点信息不完整，无法安全继续；请开始新任务。");
+      }
+    }
+    await checkedSend({ type: "PIC_EXPERT_LIST_BEGIN", taskId, checkpoint: {
+      url: context.url, page: 1, total: null, signature: null,
+      query: context.filters, size: context.size
+    } });
+    const client = getClient();
+    await log("任务启动", "先通过网站接口读取完整订单列表");
+    let displayedPage = await loadPage(client, readAll ? context : initial,
+      readAll ? 0 : initial.visiblePage.page - 1, checkpoint?.total ?? null);
+    if (readAll && displayedPage.total > listSize) {
+      listSize = displayedPage.total;
+      context = unchanged(listSize);
+      displayedPage = await loadPage(client, context, 0, displayedPage.total);
+      await checkedSend({ type: "PIC_EXPERT_CHECKPOINT", taskId, checkpoint: {
+        url: context.url, page: 1, total: displayedPage.total, signature: null,
+        query: context.filters, size: listSize
+      } });
+    }
+    const visibleStart = (initial.visiblePage.page - 1) * initial.size;
+    const visibleRows = readAll ? displayedPage.rows.slice(visibleStart, visibleStart + initial.size) : displayedPage.rows;
+    if (!context.hasOtherFilters && (displayedPage.total !== initial.visiblePage.total ||
+      SITE.signature(visibleRows) !== initial.visiblePage.signature)) {
+      throw new Error("接口结果与页面当前查询不一致，任务暂停；请重新执行查询后再继续。");
+    }
+    const total = displayedPage.total;
+    const pageCount = Math.max(1, Math.ceil(total / context.size));
+    const seen = new Set();
+    for (let page = 0; page < pageCount; page++) {
+      ensureActive();
+      if (pauseRequested) throw new Error("列表读取已暂停。");
+      const result = (readAll && page === 0) || (!readAll && context.size === initial.size && page === initial.visiblePage.page - 1)
+        ? displayedPage : await loadPage(client, context, page, total);
+      ensureActive();
+      if (checkpoint?.signature && page + 1 === checkpoint.page && SITE.signature(result.rows) !== checkpoint.signature) {
+        throw new Error("断点页订单集合已变化，不能安全继续。");
+      }
+      const saved = (await checkedSend({ type: "PIC_EXPERT_LIST_GET", taskId, page: page + 1 })).page;
+      if (saved && SITE.signature(saved.rows) !== SITE.signature(result.rows)) {
+        throw new Error("已保存的订单列表发生变化，不能安全继续。");
+      }
+      for (const row of result.rows) {
+        const id = identity(row), key = id.orderNo + "::" + id.referenceNo;
+        if (seen.has(key)) throw new Error("查询结果出现重复订单身份，任务暂停。");
+        seen.add(key);
+      }
+      await checkedSend({ type: "PIC_EXPERT_LIST_PAGE", taskId, page: page + 1, total, rows: result.rows });
+    }
+    if (seen.size !== total) throw new Error("扫描条数与查询总条数不一致，任务暂停。");
+    ensureActive();
+    if (pauseRequested) throw new Error("列表读取已暂停。");
+    await checkedSend({ type: "PIC_EXPERT_LIST_COMPLETE", taskId });
+    return { client, context, total, pageCount };
+  };
   const run = async (taskId, checkpoint = null, task = { business: "appliance" }) => {
     running = true; pauseRequested = false; forcePauseRequested = false; stopped = false; activeTaskId = taskId;
     requestController = new AbortController();
-    const seen = new Set();
     let visited = 0, failure = null, haltPromise, listing = true;
     const halt = error => {
       if (!failure) {
@@ -126,90 +215,15 @@
       return haltPromise;
     };
     try {
-      const initialContext = pageContext();
-      const initialToken = globalThis.localStorage?.getItem("userPortalVerifyToken");
-      let listSize = checkpoint ? checkpoint.size || initialContext.size : initialContext.listSize || initialContext.size;
-      const readAll = Boolean(initialContext.listSize) && listSize >= initialContext.listSize;
-      let context = { ...initialContext, size: listSize };
-      const initialQuery = JSON.stringify(initialContext.filters);
-      const initialVisiblePage = JSON.stringify(initialContext.visiblePage);
-      const ensureContextUnchanged = () => {
-        if (globalThis.localStorage?.getItem("userPortalVerifyToken") !== initialToken) {
-          const error = new Error("登录状态已变化，请重新查询后继续。"); error.auth = true; throw error;
-        }
-        const current = pageContext();
-        if (JSON.stringify(current.filters) !== initialQuery || current.url !== initialContext.url ||
-          current.size !== initialContext.size || JSON.stringify(current.visiblePage) !== initialVisiblePage) {
-          const error = new Error("任务运行期间查询条件或页面发生变化。");
-          error.fatal = true;
-          throw error;
-        }
-        return { ...current, size: listSize };
-      };
+      const initial = pageContext(), unchanged = queryGuard(initial);
+      const { client, total, pageCount, ...list } = await readCompleteList(taskId, checkpoint, initial, unchanged);
+      let context = list.context;
+      listing = false;
+      const ensureContextUnchanged = () => unchanged(context.size);
       const ensureActive = () => {
         requestController.signal.throwIfAborted();
         context = ensureContextUnchanged();
       };
-      if (checkpoint) {
-        if (context.url !== checkpoint.url || (!initialContext.listSize && checkpoint.size && initialContext.size !== checkpoint.size) ||
-          (checkpoint.query && JSON.stringify(context.filters) !== JSON.stringify(checkpoint.query)) ||
-          (!checkpoint.query && JSON.stringify(legacyFilters()) !== JSON.stringify(checkpoint.filters))) {
-          throw new Error("当前查询与断点不同，请手动恢复原查询；扩展不会调整日期或点击查询。");
-        }
-        if (!Number.isInteger(checkpoint.page) || checkpoint.page < 1 || (checkpoint.total !== null && !Number.isInteger(checkpoint.total))) {
-          throw new Error("旧版断点信息不完整，无法安全继续；请开始新任务。");
-        }
-      }
-      await checkedSend({ type: "PIC_EXPERT_LIST_BEGIN", taskId, checkpoint: {
-        url: context.url, page: 1, total: null, signature: null,
-        query: context.filters, size: context.size
-      } });
-      const client = getClient();
-      await log("任务启动", "先通过网站接口读取完整订单列表");
-      let displayedPage = await loadPage(client, readAll ? context : initialContext,
-        readAll ? 0 : initialContext.visiblePage.page - 1, checkpoint?.total ?? null);
-      if (readAll && displayedPage.total > listSize) {
-        listSize = displayedPage.total;
-        context = ensureContextUnchanged();
-        displayedPage = await loadPage(client, context, 0, displayedPage.total);
-        await checkedSend({ type: "PIC_EXPERT_CHECKPOINT", taskId, checkpoint: {
-          url: context.url, page: 1, total: displayedPage.total, signature: null,
-          query: context.filters, size: listSize
-        } });
-      }
-      const visibleStart = (initialContext.visiblePage.page - 1) * initialContext.size;
-      const visibleRows = readAll ? displayedPage.rows.slice(visibleStart, visibleStart + initialContext.size) : displayedPage.rows;
-      if (!context.hasOtherFilters && (displayedPage.total !== initialContext.visiblePage.total ||
-        SITE.signature(visibleRows) !== initialContext.visiblePage.signature)) {
-        throw new Error("接口结果与页面当前查询不一致，任务暂停；请重新执行查询后再继续。");
-      }
-      const total = displayedPage.total;
-      const pageCount = Math.max(1, Math.ceil(total / context.size));
-      for (let page = 0; page < pageCount; page++) {
-        ensureActive();
-        if (pauseRequested) throw new Error("列表读取已暂停。");
-        const result = (readAll && page === 0) || (!readAll && context.size === initialContext.size && page === initialContext.visiblePage.page - 1)
-          ? displayedPage : await loadPage(client, context, page, total);
-        ensureActive();
-        if (checkpoint?.signature && page + 1 === checkpoint.page && SITE.signature(result.rows) !== checkpoint.signature) {
-          throw new Error("断点页订单集合已变化，不能安全继续。");
-        }
-        const saved = (await checkedSend({ type: "PIC_EXPERT_LIST_GET", taskId, page: page + 1 })).page;
-        if (saved && SITE.signature(saved.rows) !== SITE.signature(result.rows)) {
-          throw new Error("已保存的订单列表发生变化，不能安全继续。");
-        }
-        for (const row of result.rows) {
-          const id = identity(row), key = id.orderNo + "::" + id.referenceNo;
-          if (seen.has(key)) throw new Error("查询结果出现重复订单身份，任务暂停。");
-          seen.add(key);
-        }
-        await checkedSend({ type: "PIC_EXPERT_LIST_PAGE", taskId, page: page + 1, total, rows: result.rows });
-      }
-      if (seen.size !== total) throw new Error("扫描条数与查询总条数不一致，任务暂停。");
-      ensureActive();
-      if (pauseRequested) throw new Error("列表读取已暂停。");
-      await checkedSend({ type: "PIC_EXPERT_LIST_COMPLETE", taskId });
-      listing = false;
       for (let page = 0; page < pageCount; page++) {
         ensureActive();
         if (pauseRequested) throw new Error("已等待在途订单结束，任务暂停。");
