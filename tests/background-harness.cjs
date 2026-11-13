@@ -10,7 +10,7 @@ const assets = { "SN图片": { extension: ".jpg", url: "data:image/jpeg;base64,/
   "发票": { extension: ".png", url: "data:image/png;base64,iVBORw==" } };
 function harness(options = {}, initial = null) {
   // Legacy initial tasks enter through chrome.storage, exactly as TaskStore migrates them in the extension.
-  let listener, stored = initial;
+  let listener, removedListener, updatedListener, stored = initial;
   const storage = {
     get: async () => ({ picExpertTask: structuredClone(stored) }),
     set: async value => { stored = structuredClone(value.picExpertTask); }
@@ -28,7 +28,7 @@ function harness(options = {}, initial = null) {
   const chrome = {
     storage: { local: storage },
     runtime: { getURL: file => "chrome-extension://test-extension/" + file, onMessage: { addListener: f => { listener = f; } } },
-    tabs: { onUpdated: { addListener() {} }, onRemoved: { addListener() {} },
+    tabs: { onUpdated: { addListener: fn => { updatedListener = fn; } }, onRemoved: { addListener: fn => { removedListener = fn; } },
       sendMessage: async (_tab, message) => options.pageMessage ? options.pageMessage(message) : ({ ok: true, running: Boolean(options.livePage) }) },
     downloads: {
       onChanged: {addListener:handler=>handlers.add(handler),removeListener:handler=>handlers.delete(handler)},
@@ -74,7 +74,7 @@ function harness(options = {}, initial = null) {
   // Settles order O1/R1 as a success with the default images; the response row says whether saving worked.
   const pair = (taskId, extra = {}, source) => send({ type: "PIC_EXPERT_ORDER_SETTLE", taskId, note: "",
     row: { orderNo: "O1", referenceNo: "R1", result: "成功", reason: "" }, assets, ...extra }, source);
-  return { send, begin, pair, calls, removed, items, store, notify, handlers, task: async () => {
+  return { send, begin, pair, calls, removed, items, store, notify, handlers, removeTab: id => removedListener(id), reloadTab: id => updatedListener(id, { status: "loading" }), task: async () => {
     // The active task with its rows, pairs and latest logs, read back through the store's own interface.
     const task = await store.getTask();
     return task && { ...task, manifestRows: await store.rows(task.id),

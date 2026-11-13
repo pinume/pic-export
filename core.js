@@ -30,19 +30,7 @@
     return `${date.getFullYear()}${p(date.getMonth() + 1)}${p(date.getDate())}-${p(date.getHours())}${p(date.getMinutes())}${p(date.getSeconds())}-${crypto.randomUUID()}`;
   };
 
-  const imageFormat = (bytes) => {
-    const b = Array.from(bytes);
-    const starts = (...prefix) => prefix.every((v, i) => b[i] === v);
-    if (starts(0xff, 0xd8, 0xff)) return { mime: "image/jpeg", extension: ".jpg" };
-    if (starts(0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a)) return { mime: "image/png", extension: ".png" };
-    const ascii = String.fromCharCode(...b);
-    if (/^GIF8[79]a/.test(ascii)) return { mime: "image/gif", extension: ".gif" };
-    if (ascii.startsWith("RIFF") && ascii.slice(8, 12) === "WEBP") return { mime: "image/webp", extension: ".webp" };
-    if (starts(0x42, 0x4d)) return { mime: "image/bmp", extension: ".bmp" };
-    throw new Error("图片内容无法识别，已跳过以避免保存错误文件。");
-  };
-
-  const api = Object.freeze({ cleanText, sanitizePathPart, buildManifestCsv, makeTaskId, imageFormat,
+  const api = Object.freeze({ cleanText, sanitizePathPart, buildManifestCsv, makeTaskId,
     MAX_ORDERS });
   globalThis.PIC_EXPERT_CORE = api;
   if (typeof module !== "undefined" && module.exports) module.exports = api;

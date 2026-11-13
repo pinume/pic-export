@@ -5,7 +5,7 @@ const fileCore = require("../core.js");
 const materials = require("../materials.js");
 
 function harness(pages, options = {}) {
-  let listener, currentFilters = options.filters || { status: [], beginTransDate: "20261001", endTransDate: "20261004" }, pauseAfterRow = false;
+  let listener, currentFilters = options.filters || { status: [], beginTransDate: "20261001", endTransDate: "20261004" }, stopAfterRow = false;
   const messages = [], calls = [], savedPages = new Map();
   const context = {
     url: "https://portal.test/app#/auditOfTrade2026", filters: currentFilters, size: options.size || 2,
@@ -34,7 +34,7 @@ function harness(pages, options = {}) {
     sendMessage: async message => {
       messages.push(message);
       options.onMessage?.(message, value => { currentFilters = value; });
-      if (message.type === "PIC_EXPERT_ORDER_SETTLE" && pauseAfterRow) listener({ type: "PIC_EXPERT_PAUSE" }, {}, () => {});
+      if (message.type === "PIC_EXPERT_ORDER_SETTLE" && stopAfterRow) listener({ type: "PIC_EXPERT_STOP" }, {}, () => {});
       if (options.sendMessage) return options.sendMessage(message);
       if (message.type === "PIC_EXPERT_LIST_PAGE") savedPages.set(message.page, { page: message.page, rows: message.rows });
       if (message.type === "PIC_EXPERT_LIST_GET") return { ok: true, page: savedPages.get(message.page) || null };
@@ -46,11 +46,10 @@ function harness(pages, options = {}) {
     PIC_EXPERT_PAGE_CORE: pageCore, PIC_EXPERT_CORE: fileCore, PIC_EXPERT_MATERIALS: materials, PIC_EXPERT_SITE_API: siteApi,
     chrome, location: { href: context.url, origin: "https://portal.test", hash: "#/auditOfTrade2026" },
     localStorage: { getItem: () => options.token ? options.token() : "session" }, console, URL, AbortController, AbortSignal, Blob,
+    // Node cannot decode images; tests that need a decode failure pass their own decoder.
+    createImageBitmap: options.createImageBitmap || (async () => ({ close() {} })),
     fetch: options.fetch || (async () => ({ ok: true, blob: async () => new Blob([new Uint8Array([0xff, 0xd8, 0xff])]) })),
-    FileReader: class { readAsDataURL(blob) {
-      blob.arrayBuffer().then(bytes => { this.result = "data:" + blob.type + ";base64," + Buffer.from(bytes).toString("base64"); this.onload(); }, () => this.onerror());
-    } },
-    Date, setTimeout, clearTimeout, Promise, Map, Set, Object, Array, String, Error
+    btoa, Date, setTimeout, clearTimeout, Promise, Map, Set, Object, Array, String, Error
   };
   sandbox.module = { exports: {} };
   sandbox.globalThis = sandbox;
@@ -58,13 +57,14 @@ function harness(pages, options = {}) {
     vm.runInNewContext(fs.readFileSync(require.resolve("../site-api.js"), "utf8"), sandbox);
     sandbox.PIC_EXPERT_SITE_API = { ...sandbox.PIC_EXPERT_SITE_API, context: siteApi.context, isReady: siteApi.isReady };
   }
+  vm.runInNewContext(fs.readFileSync(require.resolve("../image-reader.js"), "utf8"), sandbox);
   vm.runInNewContext(fs.readFileSync(require.resolve("../content.js"), "utf8"), sandbox);
   const exposed = sandbox.module.exports;
   return {
     messages, calls, context, exposed,
-    run: (taskId, checkpoint, task) => exposed.run(taskId, checkpoint, task),
+    run: (taskId, task) => exposed.run(taskId, task),
     changeFilters: value => { currentFilters = value; },
-    pauseAfterNextRow: () => { pauseAfterRow = true; },
+    stopAfterNextRow: () => { stopAfterRow = true; },
     rowStatus: listener,
     pageMessage: message => new Promise(resolve => listener(message, {}, resolve))
   };

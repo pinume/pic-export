@@ -67,7 +67,7 @@ async function finishOrder(backend, reference) {
   }
 }
 
-test("every list page is read before any detail or image, and list failure pauses without downloads", async t => {
+test("every list page is read before any detail or image, and list failure stops without downloads", async t => {
   for (const fail of [false, true]) {
     const pages = [[row("O1", "R1")], [row("O2", "R2")]];
     let reads = 0, details = 0;
@@ -81,18 +81,17 @@ test("every list page is read before any detail or image, and list failure pause
     } });
     await f.page.run(f.task.id);
     const saved = await f.store.getTask();
-    assert.equal(saved.status, fail ? "paused" : "completed");
+    assert.equal(saved.status, fail ? "failed" : "completed");
     assert.equal(details, fail ? 0 : 2);
     assert.equal(saved.completed, fail ? 0 : 2);
     if (fail) {
       assert.equal(saved.scanned, 0);
-      assert.equal(f.backend.calls.length, 0);
-      assert.ok(saved.checkpoint);
+      assert.equal(f.backend.calls.filter(call => !call.filename.endsWith(".csv")).length, 0);
     }
   }
 });
 
-test("expired login resumes after a page reload with a fresh token, persisted list, and no duplicate complete files", async t => {
+test("expired login stops the task and a new task after login downloads every order into a new directory", async t => {
   const pages = [[row("O1", "R1"), row("O2", "R2"), row("O3", "R3", "08")], [row("O4", "R4")]];
   let expired = true, token = "old-session";
   const requests = [];
@@ -115,42 +114,31 @@ test("expired login resumes after a page reload with a fresh token, persisted li
   };
   const f = await flow(t, pages, { content: { realApi: true, fetch, token: () => token } });
   await f.page.run(f.task.id);
-  const paused = await f.store.getTask();
-  assert.deepEqual([paused.status, paused.completed, paused.skipped, paused.failed], ["paused", 2, 1, 1]);
-  assert.equal(paused.currentRows.length, 0);
-  assert.equal(f.backend.calls.length, 4);
-  assert.ok((await f.store.getPage(f.task.id, 2)).rows[0].id === "id-O4");
+  const stopped = await f.store.getTask();
+  assert.deepEqual([stopped.status, stopped.completed, stopped.skipped, stopped.failed], ["failed", 2, 1, 1]);
+  assert.match(stopped.error, /登录/);
+  assert.equal(stopped.currentRows.length, 0);
+  assert.equal(f.backend.calls.length, 5);
   assert.deepEqual(requests.slice(0, 2).map(request => request.body.current), [0, 1]);
   assert.ok(requests.slice(0, 2).every(request => request.url.endsWith("queryList")));
-  const complete = await f.store.getPair(f.task.id, "R1");
-  const missing = await f.store.getPair(f.task.id, "R2");
-  f.backend.items.get(missing.files["SN图片"].downloadId).exists = false;
-  const before = requests.length;
+  const before = f.backend.calls.length;
   expired = false; token = "new-session";
-  const reopenedStore = new TaskStore(f.store.storage, f.store.databaseName);
-  t.after(async () => (await reopenedStore.open()).close());
-  const options = { store: reopenedStore, items: f.backend.items };
-  const backend = background(options);
-  const page = content(pages, { size: 3, realApi: true, fetch, token: () => token, sendMessage: backend.send });
-  options.pageMessage = page.pageMessage;
-  const resumed = await backend.send({ type: "PIC_EXPERT_TASK_RESUME", tabId: 7, frameId: 4 }, {});
-  assert.equal(resumed.ok, true);
-  await page.run(f.task.id, resumed.task.checkpoint);
-  const finished = await reopenedStore.getTask();
-  assert.deepEqual([finished.status, finished.scanned, finished.completed, finished.skipped, finished.failed], ["completed", 4, 3, 1, 0]);
-  assert.equal(finished.folderName, paused.folderName);
-  assert.deepEqual(await reopenedStore.getPair(f.task.id, "R1"), complete);
-  assert.equal(backend.calls.length, 5);
-  assert.ok(backend.calls.every(call => !call.filename.includes("/R1/") && !call.filename.includes("/R3/")));
+  const second = (await f.backend.begin()).task;
+  await f.page.run(second.id);
+  const finished = await f.store.getTask();
+  assert.deepEqual([finished.id, finished.status, finished.scanned, finished.completed, finished.skipped, finished.failed], [second.id, "completed", 4, 3, 1, 0]);
+  assert.notEqual(finished.folderName, stopped.folderName);
+  const calls = f.backend.calls.slice(before);
+  assert.equal(calls.length, 7);
+  assert.ok(calls.every(call => call.filename.startsWith("pic-expert/" + second.folderName + "/")));
   // The template's proof image has a value for O4 but is not downloaded.
-  assert.ok(backend.calls.some(call => call.filename.endsWith("/R4/SN图片.jpg")));
-  assert.ok(backend.calls.every(call => !call.filename.includes("证明材料")));
-  assert.deepEqual(requests.slice(before).filter(request => request.url.endsWith("queryDtl")).map(request => request.body.uuid), ["id-O2", "id-O4"]);
-  const csv = decodeURIComponent(backend.calls.at(-1).url.split(",").slice(1).join(","));
+  assert.ok(calls.some(call => call.filename.endsWith("/R4/SN图片.jpg")));
+  assert.ok(calls.every(call => !call.filename.includes("证明材料")));
+  const csv = decodeURIComponent(calls.at(-1).url.split(",").slice(1).join(","));
   assert.equal(csv, "\uFEFF订单号,参考号,处理结果,原因\r\nO1,R1,成功,\r\nO2,R2,成功,\r\nO3,R3,跳过,必填图片缺失：发票\r\nO4,R4,成功,");
 });
 
-test("login expiry before the first list page preserves a resumable query and completes after login", async t => {
+test("login expiry before the first list page stops the task and a new task completes after login", async t => {
   let token = null;
   const fetch = async (url) => {
     assert.ok(url.endsWith("queryList"));
@@ -158,17 +146,14 @@ test("login expiry before the first list page preserves a resumable query and co
   };
   const f = await flow(t, [[]], { content: { realApi: true, fetch, token: () => token } });
   await f.page.run(f.task.id);
-  const paused = await f.store.getTask();
-  assert.equal(paused.status, "paused");
-  assert.equal(paused.checkpoint.total, null);
-  assert.equal(f.backend.calls.length, 0);
+  assert.equal((await f.store.getTask()).status, "failed");
+  assert.equal(f.backend.calls.filter(call => !call.filename.endsWith(".csv")).length, 0);
   token = "new-session";
-  const resumed = await f.backend.send({ type: "PIC_EXPERT_TASK_RESUME", tabId: 7, frameId: 4 }, {});
-  await f.page.run(f.task.id, resumed.task.checkpoint);
+  await f.page.run((await f.backend.begin()).task.id);
   assert.equal((await f.store.getTask()).status, "completed");
 });
 
-test("list persistence failure and a later changed saved page both pause before any material processing", async t => {
+test("list persistence failure stops before any material processing", async t => {
   const pages = [[row("O1", "R1")], [row("O2", "R2")]];
   const f = await flow(t, pages);
   const save = f.store.save.bind(f.store);
@@ -177,21 +162,13 @@ test("list persistence failure and a later changed saved page both pause before 
     return save(task, changes);
   };
   await f.page.run(f.task.id);
-  const paused = await f.store.getTask();
-  assert.equal(paused.status, "paused");
-  assert.equal(paused.listed, 1);
-  assert.match(paused.error, /列表保存失败/);
+  const stopped = await f.store.getTask();
+  assert.equal(stopped.status, "failed");
+  assert.equal(stopped.listed, 1);
+  assert.match(stopped.error, /列表保存失败/);
   assert.ok(await f.store.getPage(f.task.id, 1));
   assert.equal(await f.store.getPage(f.task.id, 2), null);
-  assert.equal(f.backend.calls.length, 0);
-  f.store.save = save;
-  pages[0] = [row("NEW", "NEW-REF")];
-  const resumed = await f.backend.send({ type: "PIC_EXPERT_TASK_RESUME", tabId: 7, frameId: 4 }, {});
-  await f.page.run(f.task.id, resumed.task.checkpoint);
-  const final = await f.store.getTask();
-  assert.equal(final.status, "paused");
-  assert.match(final.error, /订单集合已变化|列表发生变化/);
-  assert.equal(f.backend.calls.length, 0);
+  assert.equal(f.backend.calls.filter(call => !call.filename.endsWith(".csv")).length, 0);
 });
 
 test("three overlapping orders keep every numbered image in its own reference folder and annotate material modification", async t => {
@@ -245,64 +222,55 @@ test("failure of a later numbered image rolls back every file of only that order
   const failed = await f.store.getRow(task.id, { orderNo: "O1", referenceNo: "R1" });
   assert.match(failed.reason, /材料修改.*NETWORK_FAILED/);
   assert.equal((await f.store.getPair(task.id, "R2")).status, "complete");
-  const before = f.backend.calls.length;
-  f.downloadOptions.failFilename = null;
-  const resumed = await f.backend.send({ type: "PIC_EXPERT_TASK_RESUME", tabId: 7, frameId: 4 }, {});
-  await f.page.run(task.id, resumed.task.checkpoint);
-  assert.deepEqual([(await f.store.getTask()).completed, (await f.store.getTask()).failed], [2, 0]);
-  assert.equal(f.backend.calls.length - before, 5);
-  assert.ok(f.backend.calls.slice(before, -1).every(call => call.filename.includes("/R1/")));
-  assert.equal((await f.store.getRow(task.id, { orderNo: "O1", referenceNo: "R1" })).reason, "材料修改");
+
 });
 
-for (const action of ["PAUSE", "STOP"]) {
-  test(`worker restart after images are saved but before the result is recorded keeps the success on ${action}`, async t => {
-    const f = await flow(t, [[row("O1", "R1")]]);
-    const identity = { orderNo: "O1", referenceNo: "R1" };
-    assert.equal((await f.backend.send({ type: "PIC_EXPERT_ORDER_CLAIM", taskId: f.task.id, identity })).done, false);
-    // The worker stops inside settle: the images are saved, but the result row is never written.
-    const save = f.store.save.bind(f.store);
-    f.store.save = (task, changes) => changes.rows?.length ? Promise.reject(new Error("worker stopped")) : save(task, changes);
-    assert.equal((await f.backend.send({ type: "PIC_EXPERT_ORDER_SETTLE", taskId: f.task.id, note: "",
-      row: { ...identity, result: "成功", reason: "" }, assets: { ...assets, "发票-2": assets["发票"] } })).ok, false);
-    assert.equal((await f.store.getPair(f.task.id, "R1")).status, "complete");
-    assert.equal(await f.store.getRow(f.task.id, identity), null);
-    const before = await f.store.getTask();
-    assert.deepEqual([before.scanned, before.completed, before.failed, before.currentRows.length], [0, 0, 0, 1]);
+test("worker restart after images are saved but before the result is recorded keeps the success on stop", async t => {
+  const f = await flow(t, [[row("O1", "R1")]]);
+  const identity = { orderNo: "O1", referenceNo: "R1" };
+  assert.equal((await f.backend.send({ type: "PIC_EXPERT_ORDER_CLAIM", taskId: f.task.id, identity })).done, false);
+  // The worker stops inside settle: the images are saved, but the result row is never written.
+  const save = f.store.save.bind(f.store);
+  f.store.save = (task, changes) => changes.rows?.length ? Promise.reject(new Error("worker stopped")) : save(task, changes);
+  assert.equal((await f.backend.send({ type: "PIC_EXPERT_ORDER_SETTLE", taskId: f.task.id, note: "",
+    row: { ...identity, result: "成功", reason: "" }, assets: { ...assets, "发票-2": assets["发票"] } })).ok, false);
+  assert.equal((await f.store.getPair(f.task.id, "R1")).status, "complete");
+  assert.equal(await f.store.getRow(f.task.id, identity), null);
+  const before = await f.store.getTask();
+  assert.deepEqual([before.scanned, before.completed, before.failed, before.currentRows.length], [0, 0, 0, 1]);
 
-    const store = new TaskStore(f.store.storage, f.store.databaseName);
-    t.after(async () => (await store.open()).close());
-    const restarted = background({ store, items: f.backend.items });
-    const response = await restarted.send({ type: "PIC_EXPERT_TASK_" + action }, {});
-    assert.ok(response.ok);
-    const task = await store.getTask(), result = await store.getRow(task.id, identity);
-    assert.equal(task.id, f.task.id);
-    assert.equal(task.folderName, f.task.folderName);
-    assert.equal(task.status, action === "PAUSE" ? "paused" : "failed");
-    assert.deepEqual([task.scanned, task.completed, task.failed, task.currentRows.length], [1, 1, 0, 0]);
-    assert.equal(result.result, "成功");
-    assert.equal(result.reason, "");
-    const directory = "pic-expert/" + task.folderName + "/R1/";
-    assert.deepEqual(f.backend.calls.map(call => call.filename),
-      [directory + "SN图片.jpg", directory + "发票.png", directory + "发票-2.png"]);
-    assert.deepEqual(Object.values((await store.getPair(task.id, "R1")).files).map(file => file.filename),
-      [directory + "SN图片.jpg", directory + "发票.png", directory + "发票-2.png"]);
-    assert.ok(f.backend.calls.every((_call, index) => f.backend.items.get(index + 1).exists));
-    assert.equal(restarted.removed.length, 0);
+  const store = new TaskStore(f.store.storage, f.store.databaseName);
+  t.after(async () => (await store.open()).close());
+  const restarted = background({ store, items: f.backend.items });
+  const response = await restarted.send({ type: "PIC_EXPERT_TASK_STOP" }, {});
+  assert.ok(response.ok);
+  const task = await store.getTask(), result = await store.getRow(task.id, identity);
+  assert.equal(task.id, f.task.id);
+  assert.equal(task.folderName, f.task.folderName);
+  assert.equal(task.status, "failed");
+  assert.deepEqual([task.scanned, task.completed, task.failed, task.currentRows.length], [1, 1, 0, 0]);
+  assert.equal(result.result, "成功");
+  assert.equal(result.reason, "");
+  const directory = "pic-expert/" + task.folderName + "/R1/";
+  assert.deepEqual(f.backend.calls.map(call => call.filename),
+    [directory + "SN图片.jpg", directory + "发票.png", directory + "发票-2.png"]);
+  assert.deepEqual(Object.values((await store.getPair(task.id, "R1")).files).map(file => file.filename),
+    [directory + "SN图片.jpg", directory + "发票.png", directory + "发票-2.png"]);
+  assert.ok(f.backend.calls.every((_call, index) => f.backend.items.get(index + 1).exists));
+  assert.equal(restarted.removed.length, 0);
 
-    // Repeated recovery must neither duplicate counts nor download images again.
-    assert.ok((await restarted.send({ type: "PIC_EXPERT_TASK_STOP" }, {})).ok);
-    assert.ok((await restarted.send({ type: "PIC_EXPERT_TASK_STOP" }, {})).ok);
-    const final = await store.getTask();
-    assert.deepEqual([final.scanned, final.completed, final.failed], [task.scanned, task.completed, task.failed]);
-    assert.equal(restarted.calls.length, 1);
-    assert.equal(restarted.calls[0].filename, "pic-expert/" + task.folderName + "/下载清单.csv");
-    assert.equal(decodeURIComponent(restarted.calls[0].url).split(",").slice(1).join(","),
-      "\uFEFF订单号,参考号,处理结果,原因\r\nO1,R1," + result.result + "," + result.reason);
-  });
-}
+  // Repeated recovery must neither duplicate counts nor download images again.
+  assert.ok((await restarted.send({ type: "PIC_EXPERT_TASK_STOP" }, {})).ok);
+  assert.ok((await restarted.send({ type: "PIC_EXPERT_TASK_STOP" }, {})).ok);
+  const final = await store.getTask();
+  assert.deepEqual([final.scanned, final.completed, final.failed], [task.scanned, task.completed, task.failed]);
+  assert.equal(restarted.calls.length, 1);
+  assert.equal(restarted.calls[0].filename, "pic-expert/" + task.folderName + "/下载清单.csv");
+  assert.equal(decodeURIComponent(restarted.calls[0].url).split(",").slice(1).join(","),
+    "\uFEFF订单号,参考号,处理结果,原因\r\nO1,R1," + result.result + "," + result.reason);
+});
 
-test("force pause aborts three detail requests through the real site API", async t => {
+test("stop aborts three detail requests through the real site API", async t => {
   let active = 0, aborted = 0;
   const requests = [];
   const rows = [row("O1", "R1"), row("O2", "R2"), row("O3", "R3")];
@@ -321,13 +289,12 @@ test("force pause aborts three detail requests through the real site API", async
   const f = await flow(t, [rows], { content: { realApi: true, fetch } });
   const running = f.page.run(f.task.id);
   await until(() => active === 3);
-  await f.backend.send({ type: "PIC_EXPERT_TASK_PAUSE" }, {});
-  await f.backend.send({ type: "PIC_EXPERT_TASK_PAUSE" }, {});
+  await f.backend.send({ type: "PIC_EXPERT_TASK_STOP" }, {});
   await running;
   const task = await f.store.getTask();
-  assert.deepEqual([task.status, task.failed, task.currentRows.length, active, aborted], ["paused", 3, 0, 0, 3]);
+  assert.deepEqual([task.status, task.failed, task.currentRows.length, active, aborted], ["failed", 3, 0, 0, 3]);
   assert.equal(requests.length, 4);
-  assert.equal(f.backend.calls.length, 0);
+  assert.equal(f.backend.calls.filter(call => !call.filename.endsWith(".csv")).length, 0);
 });
 
 test("verified total precedes downloads; the order limit and two reads per order overlap without crossing a page", async t => {
@@ -341,7 +308,7 @@ test("verified total precedes downloads; the order limit and two reads per order
   assert.equal(active.currentRows.length, MAX_ORDERS);
   assert.equal(f.backend.calls.length, 0);
   assert.equal(f.page.calls.length, 2);
-  assert.equal((await f.backend.send({ type: "PIC_EXPERT_CHECKPOINT", taskId: f.task.id, checkpoint: { page: 2, total } })).ok, false);
+  assert.equal((await f.backend.send({ type: "PIC_EXPERT_PAGE_BEGIN", taskId: f.task.id, page: 2 })).ok, false);
   gate.release("R2");
   await finishOrder(f.backend, "R2");
   await until(() => [...gate.pending.keys()].filter(url => url.includes("/" + extra + "/")).length === 2);
@@ -382,84 +349,44 @@ test("a failed order rolls back its own images while other orders succeed", asyn
   assert.ok(f.backend.removed.every(id => f.backend.items.get(id).filename.includes("/R2/")));
 });
 
-test("graceful pause drains in-flight orders, keeps its checkpoint, and resumes without duplicate files", async t => {
-  const gate = imageGate();
-  const f = await flow(t, [rows(MAX_ORDERS + 1)], { content: { fetch: gate.fetch } });
-  const running = f.page.run(f.task.id);
-  await until(() => gate.live() === MAX_ORDERS * 2);
-  await f.backend.send({ type: "PIC_EXPERT_TASK_PAUSE" }, {});
-  assert.equal((await f.store.getTask()).status, "pausing");
-  assert.equal((await f.backend.begin()).ok, false);
-  gate.releaseAll();
-  await running;
-  const paused = await f.store.getTask();
-  assert.deepEqual([paused.status, paused.completed, paused.currentRows.length, paused.checkpoint.page], ["paused", MAX_ORDERS, 0, 1]);
-  assert.equal(f.backend.calls.length, MAX_ORDERS * 2);
-  assert.ok(!gate.starts.some(url => url.includes("/" + extra + "/")));
-  const resumed = await f.backend.send({ type: "PIC_EXPERT_TASK_RESUME", tabId: 7, frameId: 4 }, {});
-  await f.page.run(f.task.id, resumed.task.checkpoint);
-  const finalTask = await f.store.getTask();
-  assert.deepEqual([finalTask.scanned, finalTask.completed, finalTask.failed], [MAX_ORDERS + 1, MAX_ORDERS + 1, 0]);
-  // Two images per order plus the manifest.
-  assert.equal(f.backend.calls.length, (MAX_ORDERS + 1) * 2 + 1);
-});
-
-for (const action of ["force-pause", "stop"]) test(`${action} cancels mixed in-flight orders before terminal state`, async t => {
+test("stop cancels mixed in-flight orders before terminal state", async t => {
   const gate = imageGate();
   const f = await flow(t, [rows(MAX_ORDERS + 1)], { downloads: { holdPair: true }, content: { fetch: gate.fetch } });
   const running = f.page.run(f.task.id);
   await until(() => gate.live() === MAX_ORDERS * 2);
   gate.release("R1");
   await until(() => f.backend.items.size === 1);
-  if (action === "force-pause") await f.backend.send({ type: "PIC_EXPERT_TASK_PAUSE" }, {});
-  await f.backend.send({ type: action === "stop" ? "PIC_EXPERT_TASK_STOP" : "PIC_EXPERT_TASK_PAUSE" }, {});
+  await f.backend.send({ type: "PIC_EXPERT_TASK_STOP" }, {});
   await running;
   const task = await f.store.getTask();
-  assert.equal(task.status, action === "stop" ? "failed" : "paused");
+  assert.equal(task.status, "failed");
   assert.deepEqual([task.scanned, task.completed, task.failed, task.currentRows.length], [MAX_ORDERS, 0, MAX_ORDERS, 0]);
   assert.equal(gate.live(), 0);
   assert.equal(gate.starts.length, MAX_ORDERS * 2);
   assert.deepEqual((await f.store.getPair(task.id, "R1")).files, {});
   assert.equal(f.backend.items.get(1).exists, false);
-  assert.equal(f.backend.calls.filter(call => call.filename.endsWith(".csv")).length, action === "stop" ? 1 : 0);
+  assert.equal(f.backend.calls.filter(call => call.filename.endsWith(".csv")).length, 1);
   assert.equal(f.backend.handlers.size, 0);
-  if (action === "force-pause") {
-    gate.releaseAll(); f.downloadOptions.holdPair = false;
-    const resumed = await f.backend.send({ type: "PIC_EXPERT_TASK_RESUME", tabId: 7, frameId: 4 }, {});
-    await f.page.run(task.id, resumed.task.checkpoint);
-    const finished = await f.store.getTask();
-    assert.deepEqual([finished.scanned, finished.completed, finished.failed], [MAX_ORDERS + 1, MAX_ORDERS + 1, 0]);
-  }
+
 });
 
-for (const fault of ["authentication", "authentication-during-pause", "query-change"]) test(`${fault} halts dispatch and drains pending reads`, async t => {
+for (const fault of ["authentication", "query-change"]) test(`${fault} halts dispatch and drains pending reads`, async t => {
   const gate = imageGate();
-  let releaseAuth;
-  const authReady = new Promise(resolve => { releaseAuth = resolve; });
   const f = await flow(t, [rows(MAX_ORDERS + 1)], {
     content: { fetch: async (url, options) => {
-      if (fault.startsWith("authentication") && url.includes("/R2/")) {
-        if (fault === "authentication-during-pause") await authReady;
-        return { ok: false, status: 401 };
-      }
+      if (fault === "authentication" && url.includes("/R2/")) return { ok: false, status: 401 };
       return gate.fetch(url, options);
     } }
   });
   const running = f.page.run(f.task.id);
-  if (fault === "authentication-during-pause") {
-    // R2's reads wait outside the gate; every other in-flight order holds two reads.
-    await until(() => gate.live() === (MAX_ORDERS - 1) * 2);
-    await f.backend.send({ type: "PIC_EXPERT_TASK_PAUSE" }, {});
-    releaseAuth();
-  }
   if (fault === "query-change") {
     await until(() => gate.live() === MAX_ORDERS * 2);
     f.page.changeFilters({ status: ["01"] }); gate.release("R1");
   }
   await running;
   const task = await f.store.getTask();
-  assert.equal(task.status, fault.startsWith("authentication") ? "paused" : "failed");
-  assert.match(task.error, fault.startsWith("authentication") ? /登录/ : /查询条件/);
+  assert.equal(task.status, "failed");
+  assert.match(task.error, fault === "authentication" ? /登录/ : /查询条件/);
   assert.equal(task.currentRows.length, 0);
   assert.equal(gate.live(), 0);
   assert.ok(!gate.starts.some(url => url.includes("/" + extra + "/")));
@@ -482,9 +409,9 @@ test("changed totals and duplicate identities fail before dispatching an invalid
     const f = await flow(t, pages, { content: { list: async (_filters, page) => ({ rows: pages[page], total: duplicate ? 2 : page ? 3 : 2 }) } });
     await f.page.run(f.task.id);
     const task = await f.store.getTask();
-    assert.equal(task.status, "paused");
+    assert.equal(task.status, "failed");
     assert.match(task.error, duplicate ? /重复订单/ : /总数发生变化/);
     assert.equal(task.scanned, 0);
-    assert.equal(f.backend.calls.length, 0);
+    assert.equal(f.backend.calls.filter(call => !call.filename.endsWith(".csv")).length, 0);
   }
 });

@@ -1,6 +1,6 @@
 const openTaskButton = document.querySelector("#open-task");
 const entryError = document.querySelector("#entry-error");
-const labels = { running: "运行中", pausing: "正在暂停", paused: "已暂停", stopping: "正在停止", finalizing: "生成清单中", completed: "已完成", failed: "已停止" };
+const labels = { running: "运行中", stopping: "正在停止", finalizing: "生成清单中", completed: "已完成", failed: "已停止" };
 let sourceTabId = null;
 let detectedBusiness = null;
 const detectMerchant = async () => {
@@ -26,8 +26,9 @@ const detectMerchant = async () => {
     if (!response?.ok) throw new Error(response?.error || "无法读取任务状态。");
     const task = response.task;
     const statusEl = document.querySelector("#" + prefix + "-status");
-    statusEl.textContent = task ? labels[task.status] || task.status : "未开始";
-    if (statusEl?.dataset) statusEl.dataset.status = task?.status || "";
+    const hasFailed = task?.status === "completed" && task.failed > 0;
+    statusEl.textContent = hasFailed ? "处理结束，存在失败订单" : task ? labels[task.status] || task.status : "未开始";
+    if (statusEl?.dataset) statusEl.dataset.status = hasFailed ? "failed" : task?.status || "";
     document.querySelector("#" + prefix + "-progress").textContent = task ? "成功 " + task.completed + " · 跳过 " + task.skipped + " · 失败 " + task.failed : business === "digital" ? "按订单类型下载数码图片资料" : "SN图片和发票";
   } catch (error) {
     if (!document.querySelector("#merchant-number").textContent) document.querySelector("#merchant-name").textContent = "未识别";

@@ -1,0 +1,62 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <title>图片读取 Chrome 验证</title>
+  <style>
+    body { font: 14px/1.6 system-ui, sans-serif; margin: 24px; }
+    li[data-ok="true"] { color: #15803d; }
+    li[data-ok="false"] { color: #b91c1c; }
+  </style>
+</head>
+<body>
+  <h1>图片读取 Chrome 验证</h1>
+  <p>离线运行：在 Chrome 中直接打开本文件。图片由页面生成，通过真实 createImageBitmap 解码，无需登录网站。</p>
+  <ol id="results"></ol>
+  <script src="../image-reader.js"></script>
+  <script>
+    // Each case serves one body with a declared type through the reader's fetcher adapter.
+    const canvasImage = type => new Promise(resolve => {
+      const canvas = document.createElement("canvas");
+      canvas.width = 4; canvas.height = 4;
+      canvas.getContext("2d").fillRect(0, 0, 2, 2);
+      canvas.toBlob(resolve, type);
+    });
+    const readWith = (body, declared) => globalThis.PIC_EXPERT_IMAGE_READER.createImageReader({
+      fetcher: async () => new Response(body, { headers: { "content-type": declared } }),
+      decode: blob => createImageBitmap(blob),
+      onRetry: async () => {}
+    }).read("offline", new AbortController().signal);
+    const report = (name, ok, detail) => {
+      const item = document.createElement("li");
+      item.dataset.ok = ok;
+      item.textContent = (ok ? "通过：" : "失败：") + name + " — " + detail;
+      document.querySelector("#results").append(item);
+      return ok;
+    };
+    (async () => {
+      const png = await canvasImage("image/png"), jpeg = await canvasImage("image/jpeg");
+      const cases = [
+        ["正常 PNG 图片成功", async () => { const r = await readWith(png, "image/png"); return [r.extension === ".png" && r.url.startsWith("data:image/png;base64,"), r.extension]; }],
+        ["正常 JPEG 图片成功", async () => { const r = await readWith(jpeg, "image/jpeg"); return [r.extension === ".jpg", r.extension]; }],
+        ["仅有 JPEG 文件头的图片失败", async () => {
+          try { await readWith(new Uint8Array([0xff, 0xd8, 0xff]), "image/jpeg"); return [false, "被当作成功"]; }
+          catch (error) { return [/图片内容不完整或已损坏/.test(error.message), error.message]; }
+        }],
+        ["截断一半的 PNG 图片失败", async () => {
+          try { await readWith(png.slice(0, Math.floor(png.size / 2)), "image/png"); return [false, "被当作成功"]; }
+          catch (error) { return [/图片内容不完整或已损坏/.test(error.message), error.message]; }
+        }],
+        ["响应头声明 JPEG、实际为 PNG 时按内容识别", async () => { const r = await readWith(png, "image/jpeg"); return [r.extension === ".png", r.extension]; }]
+      ];
+      let passed = 0;
+      for (const [name, run] of cases) {
+        try { const [ok, detail] = await run(); if (report(name, ok, detail)) passed++; }
+        catch (error) { report(name, false, error.message); }
+      }
+      document.title = passed === cases.length ? "PASS " + passed + "/" + cases.length : "FAIL " + passed + "/" + cases.length;
+      document.body.dataset.result = document.title;
+    })();
+  </script>
+</body>
+</html>

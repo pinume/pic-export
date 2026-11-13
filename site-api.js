@@ -105,12 +105,12 @@
       throw new Error(error.name === "TimeoutError" ? "网站接口请求超时。" : "网站接口连接失败。");
     }
     if (!response.ok) {
-      const error = new Error([401, 403].includes(response.status) ? "登录状态已失效，请重新登录并恢复原查询。" : "网站接口请求失败：" + response.status);
+      const error = new Error([401, 403].includes(response.status) ? "登录状态已失效，任务已终止；请重新登录后重新开始。" : "网站接口请求失败：" + response.status);
       error.auth = [401, 403].includes(response.status);
       throw error;
     }
     if (response.headers?.get("content-type")?.includes("text/html")) {
-      const error = new Error("登录状态已失效，请重新登录并恢复原查询。");
+      const error = new Error("登录状态已失效，任务已终止；请重新登录后重新开始。");
       error.auth = true;
       throw error;
     }
@@ -120,7 +120,7 @@
     if (!(result?.success === true || result?.code === 0)) {
       const message = cleanText(result?.message);
       const auth = /登录|token|认证|未授权|过期/i.test(message);
-      const error = new Error(auth ? "登录状态已失效，请重新登录并恢复原查询。" : message || "网站接口拒绝了请求。");
+      const error = new Error(auth ? "登录状态已失效，任务已终止；请重新登录后重新开始。" : message || "网站接口拒绝了请求。");
       error.auth = auth;
       throw error;
     }
@@ -128,7 +128,7 @@
   };
   const makeClient = (token, fetcher) => {
     if (!token) {
-      const error = new Error("登录状态已失效，请重新登录并恢复原查询。");
+      const error = new Error("登录状态已失效，任务已终止；请重新登录后重新开始。");
       error.auth = true;
       throw error;
     }

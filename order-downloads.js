@@ -1,4 +1,4 @@
-// Order files and results share recovery rules; task control stays in background.js.
+// Order files and results share cleanup rules; task control stays in background.js.
 globalThis.PIC_EXPERT_ORDER_DOWNLOADS = ({ db, downloads, getTask, update, assertTask, appendLog, waitForDownload }) => {
   const { sanitizePathPart, MAX_ORDERS } = globalThis.PIC_EXPERT_CORE;
   const pairs = new Map(), recoveries = new Map();
@@ -21,10 +21,11 @@ globalThis.PIC_EXPERT_ORDER_DOWNLOADS = ({ db, downloads, getTask, update, asser
     }
     return kinds;
   };
-  const rollback = async (taskId, referenceNo, sender, reason) => {
+  // `unrecorded` holds a started download whose ID could not be saved; it is cleaned up like a recorded one.
+  const rollback = async (taskId, referenceNo, sender, reason, unrecorded = {}) => {
     const pair = await db.getPair(taskId, referenceNo);
     const leftovers = Object.create(null);
-    for (const [kind, file] of Object.entries(pair.files)) {
+    for (const [kind, file] of Object.entries({ ...pair.files, ...unrecorded })) {
       try {
         await downloads.cancel(file.downloadId).catch(() => {});
         const [item] = await downloads.search({ id: file.downloadId });
@@ -55,25 +56,16 @@ globalThis.PIC_EXPERT_ORDER_DOWNLOADS = ({ db, downloads, getTask, update, asser
     await update(taskId, sender, async (_task, changes) => {
       const previous = await db.getPair(taskId, referenceNo);
       if (previous && previous.orderNo !== orderNo) throw new Error("同一参考号对应多个订单，已停止。");
-      if (!previous) changes.pairs.push({ referenceNo, orderNo, status: "pending", generation: _task.generation || 0, files: {}, note: message.note || "" });
+      if (!previous) changes.pairs.push({ referenceNo, orderNo, status: "pending", files: {}, note: message.note || "" });
       else if (message.note !== undefined && previous.note !== message.note) changes.pairs.push({ ...previous, note: message.note });
     });
     if (pairs.has(key)) return pairs.get(key);
     const promise = (async () => {
       assertTask(await getTask(taskId), taskId, sender);
-      let previous = await db.getPair(taskId, referenceNo);
+      const previous = await db.getPair(taskId, referenceNo);
       if (previous.status === "complete") return previous.files;
-      if (previous.status === "failed") {
-        const task = await getTask(taskId);
-        if ((previous.generation || 0) !== (task.generation || 0) && Object.keys(previous.files).length) {
-          await rollback(taskId, referenceNo, sender, "继续前重新清理残留文件。");
-          previous = await db.getPair(taskId, referenceNo);
-        }
-        if ((previous.generation || 0) === (task.generation || 0) || Object.keys(previous.files).length) {
-          const error = new Error(previous.error); error.files = previous.files; throw error;
-        }
-        await update(taskId, sender, (_task, changes) => { changes.pairs.push({ ...previous, status: "pending", generation: _task.generation, error: "" }); });
-      }
+      if (previous.status === "failed") { const error = new Error(previous.error); error.files = previous.files; throw error; }
+      let unrecorded = {};
       try {
         for (const kind of kinds) {
           const task = await getTask(taskId);
@@ -82,11 +74,13 @@ globalThis.PIC_EXPERT_ORDER_DOWNLOADS = ({ db, downloads, getTask, update, asser
           const existing = Object.hasOwn(pair.files, kind) ? pair.files[kind] : null;
           const filename = existing?.filename || "pic-expert/" + (task.folderName || task.id) + "/" + sanitizePathPart(referenceNo) + "/" + kind + assets[kind].extension;
           const downloadId = existing?.downloadId ?? await downloads.download({ url: assets[kind].url, filename, saveAs: false, conflictAction: "overwrite" });
+          unrecorded = { [kind]: { downloadId, filename } };
           await update(taskId, sender, (_task, changes) => {
             pair.files = { ...pair.files, [kind]: { downloadId, filename } };
             changes.pairs.push(pair);
             appendLog(changes, "下载图片", kind + "，编号 " + downloadId + "，路径 " + filename);
           }, false);
+          unrecorded = {};
           await waitForDownload(downloadId, 120000, taskId);
         }
         await update(taskId, sender, async (_task, changes) => {
@@ -95,7 +89,7 @@ globalThis.PIC_EXPERT_ORDER_DOWNLOADS = ({ db, downloads, getTask, update, asser
           appendLog(changes, "配对完成", "参考号 " + referenceNo + "，共 " + kinds.length + " 张图片下载完成");
         });
         return (await db.getPair(taskId, referenceNo)).files;
-      } catch (error) { throw await rollback(taskId, referenceNo, sender, error.message); }
+      } catch (error) { throw await rollback(taskId, referenceNo, sender, error.message, unrecorded); }
     })().finally(() => pairs.delete(key));
     pairs.set(key, promise);
     return promise;
@@ -135,19 +129,8 @@ globalThis.PIC_EXPERT_ORDER_DOWNLOADS = ({ db, downloads, getTask, update, asser
     assertTask(task, message.taskId, sender);
     const row = await db.getRow(message.taskId, message.identity);
     if (row?.page && row.page !== task.page) throw new Error("同一订单出现在不同页，查询结果已变化。");
-    if (row?.result === "跳过") return { done: !["材料修改", "SN码或发票图片缺失或不唯一"].includes(row.reason) };
-    if (row?.result !== "成功") return { done: false };
-    const pair = await db.getPair(message.taskId, message.identity.referenceNo);
-    if (!pair || pair.orderNo !== message.identity.orderNo || pair.status !== "complete") return { done: false };
-    for (const file of Object.values(pair.files)) {
-      const [item] = await downloads.search({ id: file.downloadId });
-      if (!item || item.state !== "complete" || item.exists === false) {
-        await rollback(message.taskId, pair.referenceNo, sender, "已完成文件不存在，准备重新下载。");
-        await update(message.taskId, sender, async (_t, c) => { const failed = await db.getPair(message.taskId, pair.referenceNo); failed.generation = (_t.generation || 0) - 1; c.pairs.push(failed); });
-        return { done: false };
-      }
-    }
-    return { done: true };
+    // Each task processes an order once; a recorded result means this claim is a duplicate message.
+    return { done: Boolean(row) };
   };
   const recordResult = (message, sender) => update(message.taskId, sender, async (task, changes) => {
     await upsertRow(task, changes, message.row);

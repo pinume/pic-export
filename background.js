@@ -1,5 +1,5 @@
 importScripts("core.js", "materials.js", "store.js", "order-downloads.js");
-const { buildManifestCsv, makeTaskId, cleanText } = globalThis.PIC_EXPERT_CORE;
+const { buildManifestCsv, makeTaskId } = globalThis.PIC_EXPERT_CORE;
 const db = globalThis.PIC_EXPERT_STORE;
 const MATERIALS = globalThis.PIC_EXPERT_MATERIALS, BUSINESSES = Object.keys(MATERIALS);
 const endings = new Map(), manifestExports = new Map();
@@ -14,7 +14,7 @@ const selectedTask = message => db.getBusinessTask(businessOf(message));
 const assertIdle = async () => {
   for (const business of BUSINESSES) {
     const task = await db.getBusinessTask(business);
-    if (["running", "pausing", "stopping", "finalizing"].includes(task?.status)) throw new Error("已有任务运行；请先暂停或停止。");
+    if (["running", "stopping", "finalizing"].includes(task?.status)) throw new Error("已有任务运行；请先停止。");
   }
 };
 const isTaskPage = sender => sender.url?.split("?")[0] === chrome.runtime.getURL("popup.html");
@@ -24,7 +24,7 @@ const mutate = operation => {
   return promise;
 };
 const assertTask = (task, id, sender, running = true) => {
-  if (!task || task.id !== id || (running && (task.forcePause || !["running", "pausing"].includes(task.status)))) throw new Error("任务身份已失效。");
+  if (!task || task.id !== id || (running && task.status !== "running")) throw new Error("任务身份已失效。");
   if (sender.tab && !isTaskPage(sender) && (sender.tab.id !== task.tabId || sender.frameId !== task.frameId)) throw new Error("消息来自其他页面或 frame。");
 };
 const appendLog = (changes, stage, message, level = "info") => {
@@ -121,7 +121,7 @@ const finalizeTask = (message, sender) => {
       task = await update(taskId, sender, (t, c) => {
         t.finishedAt = new Date().toISOString();
         const durationMs = Math.max(0, Date.now() - (Date.parse(t.startedAt) || Date.now()));
-        appendLog(c, "处理汇总", "查询 " + (t.checkpoint?.total ?? "未知") + "，检查 " + t.scanned + "，成功 " + t.completed + "，跳过 " + t.skipped + "，失败 " + t.failed + "，历时 " + Math.round(durationMs / 1000) + " 秒");
+        appendLog(c, "处理汇总", "已处理 " + t.scanned + "/" + (t.total ?? "未知") + "，成功 " + t.completed + "，跳过 " + t.skipped + "，失败 " + t.failed + "，历时 " + Math.round(durationMs / 1000) + " 秒");
       }, false);
     }
     await exportManifest(taskId, sender);
@@ -130,92 +130,58 @@ const finalizeTask = (message, sender) => {
   endings.set(taskId, promise);
   return promise;
 };
-const pauseTask = async (message, sender) => {
-  const task = await selectedTask(message);
-  if (!task || !["running", "pausing"].includes(task.status)) return task;
-  const force = task.status === "pausing";
-  await update(task.id, sender, (t, c) => { t.status = "pausing"; t.forcePause = force; appendLog(c, "暂停任务", force ? "中断当前等待并保存断点" : "等待在途订单结束"); }, false);
-  const response = await chrome.tabs.sendMessage(task.tabId, { type: "PIC_EXPERT_PAUSE", taskId: task.id, force }, { frameId: task.frameId }).catch(() => null);
-  if (!response?.running) {
-    await update(task.id, sender, t => { t.forcePause = true; }, false);
-    await orders.reconcile(task.id, sender);
-    return update(task.id, sender, t => { if (t.status === "pausing") t.status = "paused"; delete t.forcePause; }, false);
-  }
-  if (force) await orders.reconcile(task.id, sender);
-  return getTask(task.id);
-};
-const resumeTask = (message, sender) => mutate(async () => {
-  if (sender.tab && !isTaskPage(sender)) throw new Error("请从独立任务页面继续任务。");
-  const task = await selectedTask(message);
-  if (!task || !(["paused", "failed"].includes(task.status) || task.status === "completed" && task.failed > 0) || !task.checkpoint) throw new Error("没有可继续的断点，请先完成原查询。");
-  if (!Number.isInteger(message.tabId) || !Number.isInteger(message.frameId)) throw new Error("目标页面不完整。");
-  await assertIdle();
-  task.tabId = message.tabId; task.frameId = message.frameId; task.status = "running"; task.error = "";
-  task.generation = (task.generation || 0) + 1;
-  delete task.forcePause; task.manifestError = "";
-  delete task.finishedAt; delete task.finalStatus; delete task.manifestDownloadId;
-  const changes = { logs: [] }; appendLog(changes, "继续任务", "沿用任务目录，重新读取并核对完整订单列表");
-  await db.save(task, changes); return task;
-});
-const autoPauseTask = async (taskId, sender, error, generation) => {
-  let pausing = false;
-  const task = await update(taskId, sender, (t, c) => {
-    const canPause = ["running", "pausing"].includes(t.status) || t.status === "stopping" && !t.finalStatus;
-    if (!canPause || t.forcePause || (generation !== undefined && generation !== (t.generation || 0))) return;
-    pausing = true;
-    t.status = "pausing"; t.forcePause = true; t.error = error;
-    appendLog(c, "自动暂停", error, "error");
-  }, false);
-  if (!pausing) return task;
-  await chrome.tabs.sendMessage(task.tabId, { type: "PIC_EXPERT_PAUSE", taskId: task.id, force: true }, { frameId: task.frameId }).catch(() => {});
-  await orders.reconcile(taskId, sender);
-  return update(taskId, sender, t => {
-    if (t.status === "pausing" && (t.generation || 0) === (task.generation || 0)) { t.status = "paused"; delete t.forcePause; }
-  }, false);
+// Manual stops and source interruptions end the same way. After a manual stop a live page reports its own end;
+// a refreshed or closed source may acknowledge the stop and then vanish, so the background finishes it at once.
+const stopTask = async (task, sender, error, waitForPage = true) => {
+  task = await update(task.id, sender, t => { t.status = "stopping"; t.finalStatus = "failed"; t.error ||= error; }, false);
+  const response = await chrome.tabs.sendMessage(task.tabId, { type: "PIC_EXPERT_STOP", taskId: task.id }, { frameId: task.frameId }).catch(() => null);
+  if (waitForPage && response?.running) return getTask(task.id);
+  return finalizeTask({ taskId: task.id, status: "failed", error: task.error }, sender);
 };
 const sourceInterrupted = async (tabId, reason) => {
   for (const business of BUSINESSES) {
     const task = await db.getBusinessTask(business);
-    if (task?.tabId === tabId && ["running", "pausing"].includes(task.status)) await autoPauseTask(task.id, {}, reason, task.generation || 0);
+    // A halted or stopped page has not ended its task yet; the closed source can no longer do so.
+    if (task?.tabId === tabId && ["running", "stopping"].includes(task.status)) await stopTask(task, {}, reason, false);
   }
 };
 chrome.tabs.onUpdated.addListener((tabId, change) => {
-  if (change.status === "loading") sourceInterrupted(tabId, "来源网页已刷新或跳转，任务已中断。请等待暂停完成，恢复原日期和状态查询后继续。").catch(error => console.error("中断暂停失败：", error));
+  if (change.status === "loading") sourceInterrupted(tabId, "来源网页已刷新或跳转，任务已终止。").catch(error => console.error("中断终止失败：", error));
 });
 chrome.tabs.onRemoved.addListener(tabId => {
-  sourceInterrupted(tabId, "来源网站标签页已关闭，任务已中断。请重新打开网站并登录，恢复原查询，选择网站标签页后继续。").catch(error => console.error("中断暂停失败：", error));
+  sourceInterrupted(tabId, "来源网站标签页已关闭，任务已终止。").catch(error => console.error("中断终止失败：", error));
 });
+// Pause and resume no longer exist; a task paused by an earlier version becomes stopped and keeps its results and logs.
+const retired = (async () => {
+  for (const business of BUSINESSES) {
+    const task = await db.getBusinessTask(business);
+    if (!["pausing", "paused"].includes(task?.status)) continue;
+    await orders.reconcile(task.id, {});
+    await update(task.id, {}, (t, c) => {
+      t.status = "failed"; t.finishedAt ||= new Date().toISOString(); delete t.forcePause;
+      appendLog(c, "停止任务", "暂停功能已移除，旧的暂停任务转为已停止");
+    }, false);
+  }
+})().catch(error => console.error("旧暂停任务转换失败：", error));
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   (async () => {
+    await retired;
     switch (message?.type) {
       case "PIC_EXPERT_TASK_BEGIN": return { ok: true, task: await startTask(message) };
-      case "PIC_EXPERT_TASK_RESUME": return { ok: true, task: await resumeTask(message, sender) };
-      case "PIC_EXPERT_TASK_PAUSE": return { ok: true, task: await summary(await pauseTask(message, sender)) };
-      case "PIC_EXPERT_TASK_PAUSED": {
-        const task = await getTask(message.taskId); assertTask(task, message.taskId, sender, false);
-        if (!["pausing", "paused"].includes(task.status)) return { ok: true };
-        await orders.reconcile(task.id, sender);
-        return { ok: true, task: await update(task.id, sender, t => { if (t.status === "pausing") t.status = "paused"; delete t.forcePause; if (message.error) t.error = message.error; }, false) };
-      }
-      case "PIC_EXPERT_TASK_AUTO_PAUSE":
-        return { ok: true, task: await autoPauseTask(message.taskId, sender, message.error) };
       case "PIC_EXPERT_LIST_BEGIN":
         return { ok: true, task: await update(message.taskId, sender, t => {
           if (t.currentRows.length) throw new Error("仍有订单未完成，不能读取列表。");
-          t.phase = "listing"; t.listed = 0;
-          t.checkpoint ||= message.checkpoint;
-          t.checkpoint.size ??= message.checkpoint.size;
+          if (!Number.isInteger(message.size) || message.size < 1) throw new Error("分页大小无效。");
+          t.phase = "listing"; t.listed = 0; t.total = null; t.size = message.size;
         }) };
       case "PIC_EXPERT_LIST_PAGE":
         return { ok: true, task: await update(message.taskId, sender, (t, c) => {
-          if (t.phase !== "listing" || message.page !== Math.floor(t.listed / t.checkpoint.size) + 1) throw new Error("列表页顺序无效。");
+          if (t.phase !== "listing" || message.page !== Math.floor(t.listed / t.size) + 1) throw new Error("列表页顺序无效。");
           if (!Number.isInteger(message.total) || message.total < 0 || !Array.isArray(message.rows) ||
-            message.rows.length !== Math.max(0, Math.min(t.checkpoint.size, message.total - t.listed)) ||
-            (t.checkpoint.total !== null && t.checkpoint.total !== message.total)) throw new Error("订单列表条数与原查询不一致。");
+            message.rows.length !== Math.max(0, Math.min(t.size, message.total - t.listed)) ||
+            (t.total !== null && t.total !== message.total)) throw new Error("订单列表条数与查询总数不一致。");
           t.total = message.total;
           t.page = message.page;
-          t.checkpoint.total ??= message.total;
-          if (message.page === 1) t.checkpoint.signature ??= message.rows.map(row => cleanText(row.merOrderId) + "::" + cleanText(row.transRef)).join("\n");
           t.listed += message.rows.length;
           c.pages.push({ page: message.page, rows: message.rows });
           appendLog(c, "读取列表", t.listed === t.total && message.page === 1 ? "已读取完整订单列表 " + t.listed + "/" + t.total : "第 " + message.page + " 页，已读取 " + t.listed + "/" + t.total);
@@ -230,12 +196,11 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         assertTask(await getTask(message.taskId), message.taskId, sender);
         return { ok: true, page: await db.getPage(message.taskId, message.page) };
       }
-      case "PIC_EXPERT_CHECKPOINT":
+      case "PIC_EXPERT_PAGE_BEGIN":
         return { ok: true, task: await update(message.taskId, sender, t => {
-          if (t.currentRows?.length) throw new Error("当前页仍有订单正在处理，不能更新断点。");
-          t.checkpoint = { ...message.checkpoint };
-          t.page = message.checkpoint.page;
-          t.total = message.checkpoint.total;
+          if (t.currentRows?.length) throw new Error("当前页仍有订单正在处理，不能切换处理页。");
+          if (!Number.isInteger(message.page) || message.page < 1) throw new Error("处理页无效。");
+          t.page = message.page;
         }) };
       case "PIC_EXPERT_ORDER_CLAIM": return { ok: true, ...await orders.claim(message, sender) };
       case "PIC_EXPERT_ORDER_SETTLE": return { ok: true, ...await orders.settle(message, sender) };
@@ -247,14 +212,8 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         return { ok: true, task: await update(message.taskId, sender, t => { t.status = "stopping"; t.error = message.error || "任务中断。"; }) };
       case "PIC_EXPERT_TASK_STOP": {
         const task = await selectedTask(message);
-        if (!task || !["running", "pausing", "paused", "stopping", "finalizing"].includes(task.status)) return { ok: true, task: await summary(task) };
-        await update(task.id, sender, async t => {
-          if (t.status === "paused") await assertIdle();
-          t.status = "stopping"; t.finalStatus = "failed"; t.error = "用户停止任务。";
-        }, false);
-        const response = await chrome.tabs.sendMessage(task.tabId, { type: "PIC_EXPERT_STOP", taskId: task.id }, { frameId: task.frameId }).catch(() => null);
-        if (response?.running) return { ok: true, task: await summary(await selectedTask(message)) };
-        return { ok: true, task: await summary(await finalizeTask({ taskId: task.id, status: "failed", error: "用户停止任务。" }, sender)) };
+        if (!task || !["running", "stopping", "finalizing"].includes(task.status)) return { ok: true, task: await summary(task) };
+        return { ok: true, task: await summary(await stopTask(task, sender, "用户停止任务。")) };
       }
       case "PIC_EXPERT_MANIFEST_RETRY": {
         const task = await selectedTask(message);

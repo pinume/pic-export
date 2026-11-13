@@ -225,66 +225,130 @@ test("missing required pair, proof images or invalid format create no downloads"
   }
   assert.equal(h.calls.length, 0);
 });
-const checkpoint = {url:"https://portal.test/app#/auditOfTrade2026",page:1,total:2,signature:"O1::R1\nO2::R2",filters:[]};
-const saveCheckpoint = (h,id) => h.send({type:"PIC_EXPERT_CHECKPOINT",taskId:id,checkpoint});
-test("graceful pause preserves the task directory and completed files without exporting partial CSV", async () => {
-  const h=harness({livePage:true}),{task}=await h.begin();
-  await saveCheckpoint(h,task.id); await h.pair(task.id);
-  await h.send({type:"PIC_EXPERT_TASK_PAUSE"},{});
-  assert.equal((await h.task()).status,"pausing");
-  await h.send({type:"PIC_EXPERT_TASK_PAUSED",taskId:task.id});
-  assert.equal((await h.task()).status,"paused");
-  assert.equal(h.calls.length,2);
-  const resumed=await h.send({type:"PIC_EXPERT_TASK_RESUME",tabId:7,frameId:4},{});
-  assert.equal(resumed.task.id,task.id);
-  assert.equal(resumed.task.folderName,task.folderName);
-  assert.equal(resumed.task.completed,1);
-  assert.equal((await claim(h,task.id)).done,true);
+const waitFor = async (h, status) => {
+  const deadline = Date.now() + 5000;
+  while ((await h.task()).status !== status) {
+    assert.ok(Date.now() < deadline, "task must reach " + status);
+    await new Promise(setImmediate);
+  }
+};
+for (const [event, reason] of [["removeTab", /标签页已关闭/], ["reloadTab", /刷新或跳转/]]) {
+  test(event + " on the source stops the task, keeps complete files and a restart uses a new task", async () => {
+    const h = harness(), { task } = await h.begin();
+    await h.pair(task.id);
+    const identity = { orderNo: "20260105171734451099894895", referenceNo: "56098696654N" };
+    await claim(h, task.id, { identity });
+    h[event](99);
+    await new Promise(setImmediate);
+    assert.equal((await h.task()).status, "running");
+    h[event](7);
+    await waitFor(h, "failed");
+    const stopped = await h.task();
+    assert.deepEqual([stopped.completed, stopped.failed, stopped.scanned], [1, 1, 2]);
+    assert.equal(stopped.manifestRows.find(row => row.referenceNo === identity.referenceNo).result, "失败");
+    assert.match(stopped.error, reason);
+    assert.equal(h.calls.filter(call => call.filename.endsWith(".csv")).length, 1);
+    assert.deepEqual(h.removed, []);
+    const next = await h.begin();
+    assert.ok(next.ok);
+    assert.notEqual(next.task.id, task.id);
+    assert.notEqual(next.task.folderName, task.folderName);
+    assert.equal((await claim(h, next.task.id)).done, false);
+    assert.equal((await h.send({ type: "PIC_EXPERT_LOG", taskId: task.id, message: "late" })).ok, false);
+  });
+}
+for (const event of ["removeTab", "reloadTab"]) {
+  test("a manual stop waiting for its page is finished once on " + event + " and permits a new task", async () => {
+    const options = { livePage: true }, h = harness(options), { task } = await h.begin();
+    await h.pair(task.id);
+    assert.equal((await h.send({ type: "PIC_EXPERT_TASK_STOP" }, {})).task.status, "stopping");
+    options.livePage = false;
+    h[event](7);
+    await waitFor(h, "failed");
+    h[event](7);
+    await new Promise(setImmediate);
+    const stopped = await h.task();
+    assert.match(stopped.error, /用户停止/);
+    assert.equal(stopped.completed, 1);
+    assert.equal(h.calls.filter(call => call.filename.endsWith(".csv")).length, 1);
+    assert.ok((await h.begin()).ok);
+  });
+}
+for (const event of ["removeTab", "reloadTab"]) {
+  test("a page that acknowledges the stop and then vanishes on " + event + " does not leave the task stopping", async () => {
+    const h = harness({ livePage: true }), { task } = await h.begin();
+    await h.pair(task.id);
+    h[event](7);
+    await waitFor(h, "failed");
+    assert.equal(h.calls.filter(call => call.filename.endsWith(".csv")).length, 1);
+    // A late end report from the old page changes nothing.
+    await h.send({ type: "PIC_EXPERT_TASK_END", taskId: task.id, status: "failed", error: "用户停止任务。" });
+    assert.equal(h.calls.filter(call => call.filename.endsWith(".csv")).length, 1);
+    assert.ok((await h.begin()).ok);
+  });
+}
+test("a download whose ID cannot be saved is still removed and the order fails", async () => {
+  const h = harness(), { task } = await h.begin();
+  const save = h.store.save.bind(h.store);
+  let failed = false;
+  h.store.save = (record, changes = {}) => {
+    if (!failed && changes.pairs?.some(pair => pair.status === "pending" && pair.files["SN图片"])) {
+      failed = true;
+      return Promise.reject(new Error("database write failed"));
+    }
+    return save(record, changes);
+  };
+  const response = await h.pair(task.id);
+  assert.equal(saved(response), false);
+  assert.match(response.row.reason, /database write failed/);
+  assert.equal(h.calls.length, 1);
+  assert.deepEqual(h.removed, [1]);
+  assert.deepEqual((await h.task()).downloads.R1.files, {});
 });
-test("worker restart preserves completed rows and can rebind continuation to a new frame", async () => {
-  const h=harness(),{task}=await h.begin(); await saveCheckpoint(h,task.id); await h.pair(task.id);
-  await h.send({type:"PIC_EXPERT_TASK_PAUSE"},{});
-  const restarted=harness({store:h.store,items:h.items});
-  assert.ok((await restarted.send({type:"PIC_EXPERT_TASK_RESUME",tabId:7,frameId:9},{})).ok);
-  assert.equal((await restarted.pair(task.id)).ok,false);
-  const response=await claim(restarted,task.id,{},{tab:{id:7},frameId:9});
-  assert.equal(response.done,true);
-  assert.equal(restarted.calls.length,0);
+test("an unsaved download ID that cannot be removed is kept as a leftover with its path", async () => {
+  const h = harness({ failRemove: true }), { task } = await h.begin();
+  const save = h.store.save.bind(h.store);
+  let failed = false;
+  h.store.save = (record, changes = {}) => {
+    if (!failed && changes.pairs?.some(pair => pair.status === "pending" && pair.files["SN图片"])) {
+      failed = true;
+      return Promise.reject(new Error("database write failed"));
+    }
+    return save(record, changes);
+  };
+  assert.equal(saved(await h.pair(task.id)), false);
+  const current = await h.task();
+  assert.match(current.downloads.R1.files["SN图片"].filename, /\/R1\/SN图片\.jpg$/);
+  assert.ok(current.logs.some(entry => entry.stage === "残留文件" && entry.message.includes("SN图片.jpg")));
 });
-test("missing completed files are redownloaded rather than blindly skipped", async () => {
-  const h=harness(),{task}=await h.begin(); await saveCheckpoint(h,task.id); await h.pair(task.id);
-  h.items.get(1).exists=false;
-  assert.equal((await claim(h,task.id)).done,false);
-  assert.ok(saved(await h.pair(task.id)));
-  assert.equal(h.calls.length,4);
+test("a page halt is finished when its source closes before the page reports the end", async () => {
+  const h = harness(), { task } = await h.begin();
+  await h.send({ type: "PIC_EXPERT_TASK_HALT", taskId: task.id, error: "登录状态已失效" });
+  h.removeTab(7);
+  await waitFor(h, "failed");
+  assert.match((await h.task()).error, /登录状态已失效/);
 });
-test("failed pair is only retried after explicit continuation, never by duplicate messages", async () => {
-  const options={failInvoice:true}, h=harness(options),{task}=await h.begin(); await saveCheckpoint(h,task.id);
-  assert.equal(saved(await h.pair(task.id)),false);
-  assert.equal(saved(await h.pair(task.id)),false);
-  assert.equal(h.calls.length,2);
-  await h.send({type:"PIC_EXPERT_TASK_END",taskId:task.id,status:"failed"});
-  await h.send({type:"PIC_EXPERT_TASK_RESUME",tabId:7,frameId:4},{});
-  options.failInvoice=false;
-  assert.ok(saved(await h.pair(task.id)));
-  assert.equal((await h.task()).scanned,1);
-  assert.equal((await h.task()).completed,1);
-  assert.equal((await h.task()).failed,0);
+test("a failed pair is not retried by duplicate messages", async () => {
+  const h = harness({ failInvoice: true }), { task } = await h.begin();
+  assert.equal(saved(await h.pair(task.id)), false);
+  assert.equal(saved(await h.pair(task.id)), false);
+  assert.equal(h.calls.length, 2);
+  assert.deepEqual([(await h.task()).scanned, (await h.task()).failed], [1, 1]);
 });
-test("force pause cleans an in-flight pair and retains a resumable checkpoint", async () => {
-  const options={livePage:true,holdPair:true},h=harness(options),{task}=await h.begin();
-  await saveCheckpoint(h,task.id); const download=h.pair(task.id);
-  while(!(await h.task()).downloads.R1?.files["SN图片"]) await new Promise(setImmediate);
-  await h.send({type:"PIC_EXPERT_TASK_PAUSE"},{});
-  assert.equal((await h.task()).status,"pausing");
-  await h.send({type:"PIC_EXPERT_TASK_PAUSE"},{});
-  assert.equal((await download).ok,false);
-  await h.send({type:"PIC_EXPERT_TASK_PAUSED",taskId:task.id});
-  assert.equal((await h.task()).status,"paused");
-  assert.deepEqual((await h.task()).downloads.R1.files,{});
-  assert.equal(h.calls.some(c=>c.filename.endsWith(".csv")),false);
-  assert.ok((await h.task()).checkpoint);
-});
+for (const status of ["paused", "pausing"]) {
+  test("a " + status + " task from the earlier version becomes stopped, keeps results and logs and does not block a new task", async () => {
+    const h = harness({}, { id: "T1", status, tabId: 7, frameId: 4, checkpoint: { page: 2, total: 4 }, scanned: 1, completed: 1, skipped: 0, failed: 0,
+      manifestRows: [{ orderNo: "O0", referenceNo: "R0", result: "成功" }], downloads: {},
+      logs: [{ time: "2026-10-05", level: "info", stage: "test", message: "old" }] });
+    const current = (await h.send({ type: "PIC_EXPERT_TASK_STATE" }, {})).task;
+    assert.equal(current.status, "failed");
+    assert.equal(current.completed, 1);
+    assert.ok(current.logs.some(entry => entry.message === "old"));
+    assert.ok(current.logs.some(entry => entry.stage === "停止任务"));
+    assert.equal(h.calls.length, 0);
+    assert.ok((await h.begin()).ok);
+  });
+}
 test("large-task log updates write bounded metadata and popup responses contain no order arrays", async () => {
   const rows=Array.from({length:20000},(_,i)=>({orderNo:"O"+i,referenceNo:"R"+i,result:"成功"}));
   const h=harness({}, {id:"T1",status:"running",tabId:7,frameId:4,manifestRows:rows,downloads:{}});
@@ -333,37 +397,17 @@ test("concurrent manifest retries start only one replacement CSV download", asyn
   assert.equal(h.calls.length,2);
   assert.equal((await h.task()).manifestError,"");
 });
-test("force-pause cleanup blocks new tasks until pending downloads settle", async () => {
-  const h=harness({livePage:true,holdPair:true}),{task}=await h.begin();
-  await saveCheckpoint(h,task.id); const download=h.pair(task.id);
-  while(!(await h.task()).downloads.R1?.files["SN图片"]) await new Promise(setImmediate);
-  await h.send({type:"PIC_EXPERT_TASK_PAUSE"},{});
-  const pause=h.send({type:"PIC_EXPERT_TASK_PAUSE"},{});
-  while(!(await h.task()).forcePause) await new Promise(setImmediate);
-  assert.equal((await h.begin()).ok,false);
-  await pause; await download;
-  await h.send({type:"PIC_EXPERT_TASK_PAUSED",taskId:task.id});
-  assert.equal((await h.task()).status,"paused");
-});
-
-test("continuation retains locked leftovers and retries after the user removes them", async () => {
-  const options = { failInvoice: true, failRemove: true };
-  const h = harness(options), { task } = await h.begin();
-  await saveCheckpoint(h, task.id);
-  assert.equal(saved(await h.pair(task.id)), false);
-  await h.send({ type: "PIC_EXPERT_TASK_END", taskId: task.id, status: "failed" });
-  await h.send({ type: "PIC_EXPERT_TASK_RESUME", tabId: 7, frameId: 4 }, {});
-  options.failInvoice = false;
-  const before = h.calls.length;
-  assert.equal(saved(await h.pair(task.id)), false);
-  assert.equal(h.calls.length, before);
-  assert.ok((await h.task()).downloads.R1.files["SN图片"]);
-  await h.send({ type: "PIC_EXPERT_TASK_END", taskId: task.id, status: "failed" });
-  h.items.get(1).exists = false;
-  await h.send({ type: "PIC_EXPERT_TASK_RESUME", tabId: 7, frameId: 4 }, {});
-  assert.ok(saved(await h.pair(task.id)));
-  assert.equal((await h.task()).downloads.R1.status, "complete");
-  assert.ok((await h.task()).downloads.R1.files["SN图片"].downloadId !== 1);
+test("a stop waiting for its page blocks new tasks until the page ends", async () => {
+  const h = harness({ livePage: true, holdPair: true }), { task } = await h.begin();
+  const download = h.pair(task.id);
+  while (!(await h.task()).downloads.R1?.files["SN图片"]) await new Promise(setImmediate);
+  assert.equal((await h.send({ type: "PIC_EXPERT_TASK_STOP" }, {})).task.status, "stopping");
+  assert.equal((await h.begin()).ok, false);
+  assert.equal(saved(await download), false);
+  await h.send({ type: "PIC_EXPERT_TASK_END", taskId: task.id, status: "failed", error: "用户停止任务。" });
+  assert.equal((await h.task()).status, "failed");
+  assert.deepEqual((await h.task()).downloads.R1.files, {});
+  assert.ok((await h.begin()).ok);
 });
 
 test("failed cancellation retains the in-progress download and logs its path", async () => {
@@ -390,8 +434,8 @@ test("worker restart reconciles every in-flight identity and retains completed r
   const h = harness({}, { id: "T1", status: "running", tabId: 7, frameId: 4, page: 2, currentRows: identities,
     manifestRows: [{ orderNo: "O0", referenceNo: "R0", result: "成功", page: 1 }],
     downloads: { R1: { orderNo: "O1", status: "pending", files: { "SN图片": { downloadId: 1, filename: "SN图片.jpg" } } } } });
-  await h.send({ type: "PIC_EXPERT_TASK_PAUSE" }, {});
-  assert.equal((await h.task()).status, "paused");
+  await h.send({ type: "PIC_EXPERT_TASK_STOP" }, {});
+  assert.equal((await h.task()).status, "failed");
   assert.deepEqual([(await h.task()).scanned, (await h.task()).completed, (await h.task()).failed, (await h.task()).currentRows.length], [4, 1, 3, 0]);
   assert.ok((await h.task()).manifestRows.filter(row => row.result === "失败").every(row => row.page === 2));
   assert.deepEqual((await h.task()).downloads.R1.files, {});
@@ -428,12 +472,12 @@ test("recovery retains material modification notes for completed numbered files 
   }
 });
 
-test("continuation rechecks orders skipped by removed rules and keeps genuine missing-image skips", async () => {
-  for (const [reason, done] of [["材料修改", false], ["SN码或发票图片缺失或不唯一", false], ["SN码或发票图片缺失", true]]) {
+test("claims for an order that already has a result are duplicates", async () => {
+  for (const result of ["成功", "跳过", "失败"]) {
     const h = harness({}, { id: "T1", status: "running", tabId: 7, frameId: 4,
-      manifestRows: [{ orderNo: "O1", referenceNo: "R1", result: "跳过", reason }] });
-    const result = await claim(h, "T1");
-    assert.equal(result.ok, true);
-    assert.equal(result.done, done);
+      manifestRows: [{ orderNo: "O1", referenceNo: "R1", result, reason: "" }] });
+    const response = await claim(h, "T1");
+    assert.equal(response.ok, true);
+    assert.equal(response.done, true);
   }
 });

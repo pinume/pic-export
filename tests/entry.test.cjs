@@ -20,7 +20,7 @@ async function render(merchant, options = {}) {
     } },
     runtime: { getURL: path => 'chrome-extension://fixture/' + path, sendMessage: async message => {
       requested.push(message.business);
-      return options.response || { ok: true, task: { status: 'paused', completed: 8, skipped: 2, failed: 1 } };
+      return options.response || { ok: true, task: { status: 'failed', completed: 8, skipped: 2, failed: 1 } };
     } }
   };
   vm.runInNewContext(fs.readFileSync(require.resolve('../entry.js'), 'utf8'), { chrome, document, URL, window: { close() {} } });
@@ -36,7 +36,7 @@ for (const [business, prefix, other, number, button] of [
     const { elements, requested, opened } = await render({ name: '测试商户', number, business });
     assert.deepEqual(requested, [business]);
     assert.equal(elements.get('#' + prefix + '-card').hidden, false);
-    assert.equal(elements.get('#' + prefix + '-status').textContent, '已暂停');
+    assert.equal(elements.get('#' + prefix + '-status').textContent, '已停止');
     assert.equal(elements.get('#' + prefix + '-progress').textContent, '成功 8 · 跳过 2 · 失败 1');
     assert.equal(elements.get('#merchant-name').textContent, '测试商户');
     assert.match(elements.get('#merchant-number').textContent, new RegExp(number));
@@ -84,4 +84,11 @@ test('state read failure remains visible for the matched function', async () => 
   const { elements } = await render({ name: '测试商户', number: '89813014812B06R', business: 'digital' }, { response: { ok: false, error: '读取异常' } });
   assert.equal(elements.get('#digital-status').textContent, '读取失败');
   assert.equal(elements.get('#entry-error').textContent, '读取异常');
+});
+
+test('entry flags completed tasks that still have failed orders', async () => {
+  const { elements } = await render({ name: '测试商户', number: '89813015722APT1', business: 'appliance' }, {
+    response: { ok: true, task: { status: 'completed', completed: 695, skipped: 0, failed: 1 } }
+  });
+  assert.equal(elements.get('#entry-status').textContent, '处理结束，存在失败订单');
 });

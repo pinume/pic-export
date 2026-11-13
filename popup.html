@@ -28,12 +28,9 @@
         <div class="card-header card-header-flex">
           <div class="overview-status-line">
             <strong id="status" class="status-badge-lg">未开始</strong>
-            <span id="status-badge" class="gate-badge">待命</span>
           </div>
           <div class="task-actions details-actions">
             <button id="start" class="primary-button" type="button">开始下载</button>
-            <button id="pause" class="secondary-button" type="button" hidden>暂停任务</button>
-            <button id="resume" class="primary-button" type="button" hidden>继续上次任务</button>
             <button id="stop" class="danger-button" type="button" hidden>停止任务</button>
             <button id="retry" class="secondary-button" type="button" hidden>重试下载清单</button>
           </div>
@@ -63,30 +60,6 @@
             </div>
           </div>
         </div>
-
-        <div class="months-subcard">
-          <div class="months-header-compact">
-            <span class="months-title">订单统计看板</span>
-          </div>
-          <div class="months-grid stats-grid">
-            <div class="month-card stat-card">
-              <span class="detail-label">订单总数</span>
-              <strong id="stat-total" class="progress-num">-</strong>
-            </div>
-            <div class="month-card stat-card">
-              <span class="detail-label">成功</span>
-              <strong id="stat-completed" class="progress-num status-positive">-</strong>
-            </div>
-            <div class="month-card stat-card">
-              <span class="detail-label">跳过</span>
-              <strong id="stat-skipped" class="progress-num status-warning">-</strong>
-            </div>
-            <div class="month-card stat-card">
-              <span class="detail-label">失败</span>
-              <strong id="stat-failed" class="progress-num status-negative">-</strong>
-            </div>
-          </div>
-        </div>
       </section>
 
       <section class="overview-card log-card">
@@ -102,7 +75,7 @@
       </section>
 
       <div class="privacy-note">
-        <p>运行期间请保留银联商务页面和此控制台。来源网页刷新、跳转或关闭后，任务自动暂停；恢复原查询后可继续。</p>
+        <p>运行期间请保留银联商务页面和此控制台。登录失效、查询条件改变或来源网页刷新、跳转、关闭后，任务自动终止；已完整下载的订单文件保留。中断后需重新开始，新任务使用新目录并重新下载全部订单。</p>
         <details>
           <summary>查看开始前确认与导出规则</summary>
           <ol class="guide-steps">

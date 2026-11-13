@@ -404,34 +404,17 @@ button:disabled {
   border-radius: 4px;
 }
 
-.gate-badge {
-  font-size: 12px;
-  font-weight: 500;
-  padding: 2px 8px;
-  border-radius: 4px;
-  background: #f1f5f9;
-  color: #64748b;
-}
-
-.gate-badge[data-status="running"] {
+.status-badge-lg[data-status="running"] {
   background: #dcfce7;
   color: #15803d;
-  font-weight: 600;
 }
 
-.gate-badge[data-status="pausing"],
-.gate-badge[data-status="paused"] {
-  background: #fef3c7;
-  color: #b45309;
-}
-
-.gate-badge[data-status="completed"] {
+.status-badge-lg[data-status="completed"] {
   background: #e0e7ff;
   color: #3730a3;
-  font-weight: 600;
 }
 
-.gate-badge[data-status="failed"] {
+.status-badge-lg[data-status="failed"] {
   background: #fee2e2;
   color: #b91c1c;
 }
@@ -483,7 +466,7 @@ button:disabled {
   color: var(--text-main);
   font-weight: 600;
   line-height: 1.4;
-  word-break: break-all;
+  overflow-wrap: anywhere;
 }
 
 /* Progress Section */
@@ -538,64 +521,9 @@ button:disabled {
   background: linear-gradient(90deg, #f87171, #dc2626);
 }
 
-/* Metrics Grid */
-.months-subcard {
-  margin-top: 12px;
-  padding-top: 10px;
-  border-top: 1px solid var(--border-light);
-}
-
-.months-header-compact {
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-  margin-bottom: 8px;
-}
-
-.months-title {
-  font-size: 13px;
-  font-weight: 600;
-  color: var(--text-main);
-}
-
-.months-grid {
-  display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(130px, 1fr));
-  gap: 6px;
-  margin-top: 4px;
-}
-
-.month-card {
-  padding: 6px 10px;
-  min-height: 36px;
-  background: #ffffff;
-  border: 1px solid var(--border);
-  border-radius: var(--radius-sm);
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-}
-
-.detail-label {
-  color: var(--text-muted);
-  font-weight: 450;
-  font-size: 12px;
-}
-
-.status-positive {
-  color: var(--success);
-}
-
-.status-warning {
-  color: var(--warning);
-}
-
-.status-negative {
-  color: var(--danger);
-}
-
 /* Result Banners */
 .export-result {
+  white-space: pre-line;
   padding: 14px 18px;
   border: 1.5px solid;
   border-radius: var(--radius-md);
@@ -613,12 +541,6 @@ button:disabled {
   color: #065f46;
   background: var(--success-bg);
   border-color: var(--success-border);
-}
-
-.export-result-failure {
-  color: #991b1b;
-  background: var(--danger-bg);
-  border-color: var(--danger-border);
 }
 
 .export-result-stopped {

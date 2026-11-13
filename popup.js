@@ -1,8 +1,6 @@
 const startButton = document.querySelector("#start");
 const stopButton = document.querySelector("#stop");
 const retryButton = document.querySelector("#retry");
-const pauseButton = document.querySelector("#pause");
-const resumeButton = document.querySelector("#resume");
 const exportLogsButton = document.querySelector("#export-logs");
 const statusElement = document.querySelector("#status");
 const progressElement = document.querySelector("#progress");
@@ -17,10 +15,10 @@ const businessSelect = document.querySelector("#business");
 businessSelect.value = new URLSearchParams(location.search).get("business") === "digital" ? "digital" : "appliance";
 let business = businessSelect.value;
 const preferredTabId = Number(new URLSearchParams(location.search).get("tabId")) || null;
-const sourceTab = async resume => {
+const sourceTab = async () => {
   const tabs = await chrome.tabs.query({ url: "https://service.chinaums.com/*" });
   const task = (await request({ type: "PIC_EXPERT_TASK_STATE" })).task;
-  const id = resume ? task?.tabId : preferredTabId || task?.tabId;
+  const id = preferredTabId || task?.tabId;
   const bound = tabs.find(tab => tab.id === id);
   if (bound) return bound;
   if (tabs.length === 1) return tabs[0];
@@ -33,49 +31,48 @@ const request = async message => {
   return response;
 };
 const renderTask = task => {
-  const labels = { running: "运行中", pausing: "等待在途订单结束后暂停", paused: "已暂停", stopping: "正在停止", finalizing: "正在生成清单", completed: "已完成", failed: "已停止" };
-  statusElement.textContent = task ? labels[task.status] || task.status : "未开始";
+  const labels = { running: "运行中", stopping: "正在停止", finalizing: "正在生成清单", completed: "已完成", failed: "已停止" };
+  const hasFailed = task?.failed > 0;
+  const displayStatus = task?.status === "completed" && hasFailed ? "failed" : task?.status;
+  statusElement.textContent = task?.status === "completed" && hasFailed ? "处理结束，存在失败订单" : task ? labels[task.status] || task.status : "未开始";
   if (task?.status === "running" && task.phase) statusElement.textContent = task.phase === "listing" ? "正在读取完整订单列表" : "正在处理订单资料";
-  progressElement.textContent = task ? "订单总数 " + (task.total ?? task.checkpoint?.total ?? "核对中") +
-    " · 页 " + task.page + " · 已处理 " + task.scanned + " · 正在处理 " + (task.currentRows?.length || 0) +
-    " · 成功 " + task.completed + " · 跳过 " + task.skipped + " · 失败 " + task.failed : "";
-  if (task?.phase === "listing") progressElement.textContent += " · 列表已读取 " + (task.listed || 0);
+  // Page and in-flight orders only matter while orders are still being processed.
+  const active = ["running", "stopping"].includes(task?.status);
+  progressElement.textContent = !task ? "" : ["订单总数 " + (task.total ?? "核对中"),
+    ...(task.phase === "listing" ? ["列表已读取 " + (task.listed || 0)] : [
+      active && task.page ? "第 " + task.page + " 页" : "", "已处理 " + (task.scanned ?? 0),
+      active ? "正在处理 " + (task.currentRows?.length || 0) : "",
+      "成功 " + (task.completed ?? 0), "跳过 " + (task.skipped ?? 0), "失败 " + (task.failed ?? 0)])
+  ].filter(Boolean).join(" · ");
   const setEl = (sel, txt) => { const el = document.querySelector(sel); if (el) el.textContent = txt; };
-  const badge = document.querySelector("#status-badge");
-  if (badge) { badge.textContent = statusElement.textContent; if (badge.dataset) badge.dataset.status = task?.status || ""; }
+  statusElement.dataset.status = displayStatus || "";
   if (!task) {
-    setEl("#stat-total", "-"); setEl("#stat-completed", "-"); setEl("#stat-skipped", "-"); setEl("#stat-failed", "-");
     const bar = document.querySelector("#progress-bar-fill");
     if (bar?.style) { bar.style.width = "0%"; if (bar.dataset) bar.dataset.status = ""; }
     setEl("#progress-percent", "0%");
   } else {
-    setEl("#stat-total", String(task.total ?? task.checkpoint?.total ?? (task.status === "running" ? "核对中" : "-")));
-    setEl("#stat-completed", String(task.completed ?? 0));
-    setEl("#stat-skipped", String(task.skipped ?? 0));
-    setEl("#stat-failed", String(task.failed ?? 0));
-    const totalNum = Number(task.total ?? task.checkpoint?.total);
+    const totalNum = Number(task.total);
     const scannedNum = Number(task.scanned || 0);
     const pct = Number.isFinite(totalNum) && totalNum > 0 ? Math.min(100, Math.max(0, Math.round((scannedNum / totalNum) * 100))) : (task.status === "completed" ? 100 : 0);
     const bar = document.querySelector("#progress-bar-fill");
-    if (bar?.style) { bar.style.width = pct + "%"; if (bar.dataset) bar.dataset.status = task.status; }
-    setEl("#progress-percent", task.phase === "listing" && task.status === "running" ? "读取列表 " + (task.listed || 0) : pct + "%");
+    if (bar?.style) { bar.style.width = pct + "%"; if (bar.dataset) bar.dataset.status = displayStatus; }
+    setEl("#progress-percent", task.phase === "listing" && task.status === "running" ? "读取列表 " + (task.listed || 0) : "已处理 " + pct + "%" + (hasFailed ? " · 失败 " + task.failed : ""));
   }
   const terminal = task && ["completed", "failed"].includes(task.status);
   completionElement.hidden = !terminal;
-  completionElement.dataset.status = terminal ? task.status : "";
+  completionElement.dataset.status = terminal ? displayStatus : "";
   completionElement.textContent = terminal ?
-    (task.status === "completed" ? "任务已完成" : "任务已停止") + "。成功 " + task.completed + "，跳过 " + task.skipped +
+    (task.status === "completed" ? hasFailed ? "处理结束，存在失败订单" : "任务已完成" : "任务已停止，已完整下载的订单文件保留") +
+      "。已处理 " + task.scanned + "/" + (task.total ?? "未知") + "，成功 " + task.completed + "，跳过 " + task.skipped +
       "，失败 " + task.failed + "。" + (task.manifestError ? "清单下载失败" :
-        task.manifestDownloadId !== undefined ? "清单已下载" : "清单状态未知") : "";
-  errorElement.textContent = [task?.error, task?.manifestError].filter(Boolean).join("\n");
-  const interrupted = Boolean(task?.error) && ["pausing", "paused"].includes(task?.status);
+        task.manifestDownloadId !== undefined ? "清单已下载" : "清单状态未知") + (task.error ? "\n" + task.error : "") : "";
+  const interrupted = Boolean(task?.error) && ["stopping", "finalizing"].includes(task?.status);
+  // The interruption or end notice already carries the task error.
+  errorElement.textContent = [interrupted || terminal ? "" : task?.error, task?.manifestError].filter(Boolean).join("\n");
   interruptionElement.hidden = !interrupted;
-  interruptionElement.textContent = interrupted ? (task.status === "pausing" ? "任务已中断，正在自动暂停并整理未完成订单。" : "任务已中断并暂停，已完成的文件保留。") + "\n" + task.error : "";
-  startButton.disabled = ["running", "pausing", "stopping", "finalizing"].includes(task?.status);
-  stopButton.hidden = !["running", "pausing", "paused", "stopping", "finalizing"].includes(task?.status);
-  pauseButton.hidden = !["running", "pausing"].includes(task?.status);
-  pauseButton.textContent = task?.status === "pausing" ? "立即暂停当前等待" : "暂停任务";
-  resumeButton.hidden = !(["paused", "failed"].includes(task?.status) || task?.status === "completed" && task.failed > 0) || !task?.checkpoint;
+  interruptionElement.textContent = interrupted ? "任务已中断，正在整理未完成订单。\n" + task.error : "";
+  startButton.disabled = ["running", "stopping", "finalizing"].includes(task?.status);
+  stopButton.hidden = !["running", "stopping", "finalizing"].includes(task?.status);
   exportLogsButton.disabled = !task || exportingLogs;
   retryButton.hidden = !task?.manifestError;
   const logText = (task?.logs || []).map(entry => new Date(entry.time).toLocaleString("zh-CN", { hour12: false }) +
@@ -91,15 +88,15 @@ const refresh = async () => {
   try { const response = await request({ type: "PIC_EXPERT_TASK_STATE" }); if (selected === business) renderTask(response.task); }
   catch (error) { if (selected === business) errorElement.textContent = error.message; }
 };
-const launch = async resume => {
+const launch = async () => {
   businessSelect.disabled = true;
   startButton.disabled = true;
   errorElement.textContent = "";
   let task;
   try {
-    const tab = await sourceTab(resume);
+    const tab = await sourceTab();
     const injected = await chrome.scripting.executeScript({
-      target: { tabId: tab.id, allFrames: true }, files: ["core.js", "page-core.js", "materials.js", "site-api.js", "content.js"]
+      target: { tabId: tab.id, allFrames: true }, files: ["core.js", "page-core.js", "materials.js", "site-api.js", "image-reader.js", "content.js"]
     });
     const probes = await Promise.all(injected.map(async result => ({
       frameId: result.frameId,
@@ -107,10 +104,9 @@ const launch = async resume => {
     })));
     const frameId = globalThis.PIC_EXPERT_PAGE_CORE.chooseFrame(probes);
     const probe = probes.find(item => item.frameId === frameId)?.result;
-    if (probe?.running) throw new Error("页面上一笔任务仍在退出，请稍候，或手动刷新并恢复原查询后继续。");
-    task = (await request({ type: resume ? "PIC_EXPERT_TASK_RESUME" : "PIC_EXPERT_TASK_BEGIN", tabId: tab.id, frameId,
-      ...(resume ? {} : { tradeDateRange: probe?.tradeDateRange }) })).task;
-    const response = await chrome.tabs.sendMessage(tab.id, { type: "PIC_EXPERT_START", taskId: task.id, task: { business }, checkpoint: resume ? task.checkpoint : null }, { frameId });
+    if (probe?.running) throw new Error("页面上一笔任务仍在退出，请稍候，或手动刷新页面并重新查询后再开始。");
+    task = (await request({ type: "PIC_EXPERT_TASK_BEGIN", tabId: tab.id, frameId, tradeDateRange: probe?.tradeDateRange })).task;
+    const response = await chrome.tabs.sendMessage(tab.id, { type: "PIC_EXPERT_START", taskId: task.id, task: { business } }, { frameId });
     if (!response?.ok) throw new Error(response?.error || "页面任务启动失败。");
     renderTask(task);
   } catch (error) {
@@ -121,13 +117,8 @@ const launch = async resume => {
   }
   finally { businessSelect.disabled = false; }
 };
-startButton.addEventListener("click", () => launch(false));
-resumeButton.addEventListener("click", async () => {
-  resumeButton.disabled = true;
-  try { await launch(true); } finally { resumeButton.disabled = false; }
-});
+startButton.addEventListener("click", launch);
 for (const [button, type] of [
-  [pauseButton, "PIC_EXPERT_TASK_PAUSE"],
   [stopButton, "PIC_EXPERT_TASK_STOP"],
   [retryButton, "PIC_EXPERT_MANIFEST_RETRY"]
 ]) {
